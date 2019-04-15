@@ -1,0 +1,3651 @@
+
+
+Introduction
+The flows shown in this section are meant to provide a rough overview. A more detailed Connect 3DSv2 flow can be found below, in the Technical refinement section.
+
+
+
+
+
+Flow diagram 3DS payment
+
+
+
+Above is the flow diagram for a 3DS payment drawn bij Rik van t Hof. Not all issuers will (initially) support 3DS v2, so when a CreatePayment (IOWP) or RPP DoPayment (DO_PAYMENT) request comes in, PE first checks if 3DS is possible (is card enrolled, etc.) and, if so, with which version. If the issuer only supports v1, nothing will change (not shown is 2-step, which leaves the init of the last flow (complete) to the merchant instead of doing it automatically after validation. This has no other impact and will be the same for both versions q1).
+
+If it is v2, there are two possibilities. The issuer offers a method URL or it doesn't. The method URL is used to provide the issuer with a manor to execute their own Risk analysis script on the customer's browser, hopefully resulting in better fraud detection.
+
+If a method URL is returned, then PE will return that URL to Connect. Connect will either make sure that the method gets executed in the RPP, or that the merchant receives a redirect in the case of an S2S implementation. This redirect will be for a new RPP page, handling all of the complicated method URL business for the merchant.
+
+After the method URL has been loaded into an iFrame on a new RPP page and the script has executed, there will not be a redirect back. Instead the RPP will receive an event. This means the RPP will have to poll to get an update on whether the method has finished executing. Due to the method URL costing money for the issuers (data collection is likely to be done via a third party), it is highly unlikely it will be used. It still has to be supported.
+
+At this point, the method URL being present comes together with the no-method-url flow. All authentication data has been retrieved where possible and Connect will tell PE to do an A(uthentication)Req(uest) to the issuer, which will return either Y (all good) or C (authentication challenged) in an A(uthentication)Res(ponse) q2.
+
+The result of ARes is based on datapoints that are both gathered during the method url redirect as well as in the createPayment request. There are several hundred possible datapoints, some of which can be based on already exposed fields (like billing country). Rik van t Hof found that in most cases optional fields that can be used as datapoints are not provided by merchants q3.
+
+In the case of Y, the consumer can be redirected back to the merchant / RPP. This is called a frictionless flow and will occur if the issuer determines, based on the provided/gathered datapoints, that the fraud risk is very low (consumer is paying a low amount from a previously-used country with known device and from merchant from which they ordered in the past, etc.).
+
+In the case of C, the consumer will face different challenges depending on their payment environment: browser or app. This can be compared with the 3DS v1 flow where the consumer would always be challenged, although the challenges are (slightly) different.
+
+If the consumer is paying from within a browser an URL will be returned by PE (in the poll response if there is a method URL or in the IOWP/DP response q2) as a redirect action to the issuer's website to perform the challenge. Here the consumer has to validate themselves with a password, sms code, biometric data, etc.. The authentication will be handled by the issuer. This is the easy flow for Connect and comparable with 3DS V1. The consumer will be redirected back to Connect.
+
+If they're paying in a mobile app the consumer can face one or more sequential challenges. I.e. they can first be asked for a password, then for their address and then for their birthdate, etc.. This goes on until the issuer is satisfiedq4. This will likely have to be supported by the app (involve the client SDKs and their example app?)
+
+In both cases, the flow will continue the same way as 3DS v1. The issuer will let PE know the result of the challenge (200+ = accepted or 180 = rejected). If the payment is accepted (200+ except 220 with AuthIndicator 1 or 3) the PE (or the merchant if 2-step is enabled) will be able to complete the payment.
+
+Translating needs from Connect
+Above flow and description looking at solely Connect can be viewed as the following
+
+
+
+Based on the above flow, the following changes are needed in Connect:
+
+*1 Allow merchants/RPP to provide datapoints in Create/DoPayment
+For the data we receive from Merchants, what data type/ map do we expect from the Merchant? q3.
+
+Answer: See the table below, containing all 3DSv2 fields and how Connect will handle them.
+
+*1 Allow RPP to collect datapoints
+It might be possible to use the DI SDK mentioned above in the RPP, but first impressions are that the SDK is intended for native mobile apps. We might need to write our own script for collecting the datapoints and present them in the same structure as the SDK. The JavaScript SDK seems the best place for this. For the data we need to map ourselves, what fields are the minimal set we must map, how can we get those?q9
+
+Answer: The fields that we should at least map are the fields that are required in the AReq. These fields should either be provided by the merchant in the Create Payment/Hosted Checkout call, or we should gather them ourselves, or we should see to it that we provide sensible defaults. In the end it will likely be a combination of all of these things.
+
+*1 Integrate Device Information SDK in C2S SDKs and apps
+Integrating the device information SDK of EMVCo (specification found here) in the C2S SDKs will allow us to collect all available datapoints without much hassle.
+
+*3 and *4 A page with the method URLq10 (in an invisible iFrame) to allow issuer to gather data, and a follow-up redirect.
+Page should show a loading spinner and poll for the result in PE q2. If the result is 200, the consumer should be redirected back to the merchant / be shown a result page (frictionless flow). If the consumer is being challenged, they should be redirected to the issuer. 
+
+Support multiple challenges in app
+It is still unclear how the multiple challenges can be accessed q4.
+
+Additional notes:
+ApplePay and GooglePay are both card-based and, as such, susceptible to 3DS. Nothing special will need to be done with regards to these two products since in the end they result in regular card payments. q18
+
+Rik van t Hof: intended is for all redirection to go through Connect, not ORB q8.
+
+Technical refinement
+The mentioned fields and communication messages on this page ONLY cover the Merchant - Connect communication. Connect - PE communication is covered on SDD 3Dv2
+
+In regards to all refined processes above, we also need extra investigation/ clarification on technical parts. This following JSON depicts the input we expect from the Merchants on a create payment.
+
+Create payment and Create hosted checkout request fields
+This data is based on the json proposal as written by Rik van t Hof and Ronald Middelkoop and looked over by Petra Steenstra
+
+The description in regards to the field ONLY covers the fields represented in our public API. The deprecated, moved and new fields are for both the Create Payment Request and the Create Hosted Checkout Request.
+
+All noted requiredness and types are as represented in our API, this does not neccesarily reflect the requiredness for the PE fields.
+
+Please note that these fieldmappings are by all means NOT complete, only all touched fields are represented in this table.
+
+Any red field is not (yet) exposed to the Merchant as per the implementation of the Browser flow will be phase 1.
+
+Any green field is optional, but required for either APP Flow or BROWSER Flow. The browser flow fields will be input on the s2s call, but gathered from RPP during the Hosted Checkout Create Payment call.
+
+CUSTOMERACCOUNTSHIPPINGADDRESSNAMEINDICATOR will not be part of Connect message to PE.
+
+Requiredness and type on all fields that move stays the same as they were before, this is why these properties are not detailed on the deprecated/moved fields.
+
+
+
+Field name	Field	Scope	PE Field	Remarks	Extra input needed from	API Reference
+New	Moved	Deprecated	Type
+"fraudFields"	
+
+
+
+
+
+
+
+
+
+"deviceFingerprintActivated"	
+
+X	
+
+
+
+Deprecate - Field is unused	
+
+
+
+
+"addressesAreIdentical"	
+X	X	
+
+
+
+Deprecate - order.shipping.addressIndicator covers this as well.	
+Ok
+
+"cardOwnerAddress"	
+
+X	
+
+
+
+Deprecate entire group	
+
+
+
+
+
+"additionalInfo"	
+
+X	
+
+
+
+This is the same as the billingAddress - Deprecate
+
+
+
+
+
+"city"	
+
+X	
+
+
+
+This is the same as the billingAddress - Deprecate
+
+
+
+
+
+"countryCode"	
+
+X	
+
+
+
+This is the same as the billingAddress - Deprecate
+
+
+
+
+
+"houseNumber"	
+
+X	
+
+
+
+This is the same as the billingAddress - Deprecate	
+
+
+
+
+
+"state"	
+
+X	
+
+
+
+This is the same as the billingAddress - Deprecate
+
+
+
+
+
+"stateCode"	
+
+X	
+
+
+
+This is the same as the billingAddress - Deprecate
+
+
+
+
+
+"street"	
+
+X	
+
+
+
+This is the same as the billingAddress - Deprecate
+
+
+
+
+
+"zip"	
+
+X	
+
+
+
+This is the same as the billingAddress - Deprecate
+
+
+
+
+"giftCardType"	
+
+
+
+
+
+
+Leave as is	
+
+
+
+
+"giftMessage"	
+
+
+
+
+
+
+Leave as is	
+
+
+
+
+"shippingDetails"	
+
+X	
+
+
+
+Deprecate entire group	
+
+
+
+
+
+"methodDetails"	
+
+X	
+
+
+
+Deprecate - The expected content of this field is very vague	
+
+
+
+
+
+"methodSpeed"	
+
+X	
+
+
+
+Deprecate	
+
+
+
+"methodType"	
+
+X	
+
+
+
+Deprecate - Shouldn't this have been an enum in the first place?	
+
+
+
+"merchant"	X	
+
+
+
+
+
+Although this object contains only fields for  and , we will pick it up as part of ICON-6968 so there would be no conflicts later on. This property will be marked as @HideFromPublicApi though, that will have to be removed later on.
+
+
+Not there yet
+
+"websiteUrl"	
+X	
+AN60	
+
+
+
+
+
+Moved from fraudFields.website
+
+Preferably expand size to AN2048 and then trim for to 60 for current mapping, although this would be just to make the API look nice and would have no functional benefit. Let's not do that and keep it on AN60 (although that seems too small)
+
+Isn't this the exact same field as contactWebsiteUrl? are we going to deprecate this one?
+
+
+
+
+"contactWebsiteUrl"	X	
+
+AN2048	
+
+
+Needs to be mapped in PE still.
+
+Will be mapped to CONTACTWEBSITEURL under AUTHENTICATE
+
+New field for the URL to the support/contact page of the merchant.	
+
+
+"seller"	
+X	
+
+
+
+
+Moved from order.seller	
+
+
+
+"address"	
+X	
+
+
+
+
+Moved from order.seller.address	
+
+
+
+
+"additionalInfo"	
+X	
+
+
+
+
+Moved from order.seller.address	
+
+
+
+
+"city"	
+X	
+
+
+
+
+Moved from order.seller.address	
+
+
+
+
+"countryCode"	
+X	
+
+
+
+
+Moved from order.seller.address	
+
+
+
+
+"houseNumber"	
+X	
+
+
+
+
+Moved from order.seller.address	
+
+
+
+
+"state"	
+X	
+
+
+
+
+Moved from order.seller.address	
+
+
+
+
+"stateCode"	
+X	
+
+
+
+
+Moved from order.seller.address	
+
+
+
+
+"street"	
+X	
+
+
+
+
+Moved from order.seller.address	
+
+
+
+
+"zip"	
+X	
+
+
+
+
+Moved from order.seller.address	
+
+
+
+"channelCode"	
+X	
+
+
+
+
+Moved from order.seller
+
+
+
+
+
+
+"description"	
+X	
+
+
+
+
+Moved from order.seller	
+
+
+
+"geocode"	
+X	
+
+
+
+
+Moved from order.seller	
+
+
+
+
+
+"id"	
+X	
+
+
+
+
+Moved from order.seller. Required	
+
+
+
+"invoiceNumber"	
+X	
+
+
+
+
+Moved from order.seller. 	
+
+
+
+
+
+"mcc"	
+X	
+
+
+
+
+Moved from order.seller	
+
+
+
+"name"	
+X	
+
+
+
+
+Moved from order.seller. Required	
+
+
+
+"type"	
+X	
+
+
+
+
+Moved from order.seller. Required (is an enum)	
+
+"order"	
+
+
+
+
+
+
+
+
+
+"additionalInput"	
+
+
+
+
+
+
+
+
+
+
+"airlineData"	
+
+
+
+
+
+
+
+
+
+
+
+"isRegisteredCustomer"	
+
+X	
+
+
+
+Deprecate, this is the same as order.customer.accountType	
+Ok
+
+
+"transactionType"	x	
+
+
+
+
+TRANSACTIONTYPE (FRAUD-5890)	
+Required for merchants from Brazil
+
+Identifies the type of transaction being authenticated.
+
+Connect enum value
+
+purchase = The purpose of the transaction is to purchase goods or services
+check-acceptance = The purpose of the transaction is to accept a 'check'/'cheque'
+account-funding = The purpose of the transaction is to fund an account
+quasi-cash = The purpose of the transaction is buy a quasi cash type product that is representative of actual cash such as money orders, traveler's checks, foreign currency, lottery tickets or casino gaming chips.
+prepaid-activation-or-load = The purpose of the transaction is to activate or load a prepaid card
+PE enum values (at least, EMVCo spec)
+
+• 01 = Goods/ Service Purchase
+• 03 = Check Acceptance
+• 10 = Account Funding
+• 11 = Quasi-Cash Transaction
+• 28 = Prepaid Activation and Load
+Note: Values derived from the 8583 ISO Standard.
+
+
+
+
+"customer"	
+
+
+
+
+
+
+
+
+
+
+"isPreviousCustomer"	
+X	
+
+
+
+
+Moved from fraudFields	
+
+
+
+"account"	?	
+
+
+
+
+
+
+
+
+
+
+"createDate"	X	
+
+N8	
+
+
+CUSTOMERACCOUNTCREATEDATE (YYYYMMDD)
+
+CUSTOMERACCOUNTDATE
+
+CUSTOMERACCOUNTAGEINDICATOR
+
+We will calculate the CustomerAccountAgeIndicator using this field and the order.customer.accountType.
+
+CUSTOMERACCOUNTAGEINDICATOR
+
+1 = No account (guest check-out) 
+2 = Created during this transaction 
+3 = Less than 30 days 
+4 = 30-60 days 
+5 = More than 60 days
+
+ACCOUNTTYPE = None && CREATEDATE today -> 1
+ACCOUNTTYPE = created && CREATEDATE today -> 2
+ACCOUNTTYPE = existing && CREATEDATE -> 3,4,5
+
+What with the nulls
+
+ACCOUNTTYPE = null && CREATEDATE = null -> don't send to PE
+ACCOUNTTYPE = null && CREATEDATE = date today -> 2
+ACCOUNTTYPE = null && CREATEDATE = date -> 3,4,5
+ACCOUNTTYPE = none && CREATEDATE = null -> 1
+ACCOUNTTYPE = created && CREATEDATE = null -> 2
+ACCOUNTTYPE = existing && CREATEDATE = null -> 3
+
+
+
+Ok
+
+
+
+"changeDate"	X	
+
+N8	
+
+
+CUSTOMERACCOUNTCHANGEDATE (YYYYMMDD)
+
+CUSTOMERACCOUNTCHANGEINDICATOR
+
+CUSTOMERACCOUNTCHANGEDDURINGCHECKOUT (FRAUD-5890)
+
+We will calculate the CustomerAccountChangeIndicator based on this field and the changedDuringCheckout field.
+
+CUSTOMERACCOUNTCHANGEINDICATOR
+
+1 = Changed during this transaction 
+2 = Less than 30 days 
+3 = 30-60 days 
+4 = More than 60 days
+
+CHANGEDDURINGCHECKOUT = True && CHANGEDATE anytime -> 1
+CHANGEDDURINGCHECKOUT = False && CHANGEDATE today -> 2
+CHANGEDDURINGCHECKOUT = False && CHANGEDATE date -> 2,3,4
+
+What with the nulls
+
+CHANGEDDURINGCHECKOUT = null && CHANGEDATE = null -> don't send to PE
+CHANGEDDURINGCHECKOUT= null && CHANGEDATE = today -> 1
+CHANGEDDURINGCHECKOUT = null && CHANGEDATE = date -> 2,3,4 CHANGEDDURINGCHECKOUT = true && CHANGEDATE = null -> 1
+CHANGEDDURINGCHECKOUT = false && CHANGEDATE = null -> 2
+
+
+Ok
+
+
+
+
+"changedDuringCheckout"	X	
+
+Boolean	
+
+
+
+
+
+
+Please correct typo: checkout/n
+
+
+
+"passwordChangeDate"	X	
+
+N8	
+
+
+CUSTOMERACCOUNTPASSWORDCHANGEDATE
+
+CUSTOMERACCOUNTPASSWORDCHANGEINDICATOR
+
+CUSTOMERACCOUNTCHANGEDPASSWORDDURINGCHECKOUT (FRAUD-5890)
+
+We will calculate the CustomerAccountPasswordChangeIndicator based on this field and the passwordChangedDuringCheckout field
+
+CUSTOMERACCOUNTPASSWORDCHANGEINDICATOR
+
+1 = No change 
+2 = Changed during this transaction 
+3 = Less than 30 days 
+4 = 30-60 days 
+5 = More than 60 days
+
+passwordChangedDuringCheckout= True && passwordChangeDate anytime -> 2
+passwordChangedDuringCheckout= False && passwordChangeDate today -> 3
+passwordChangedDuringCheckout= False && passwordChangeDate date -> 3,4,5
+
+What with the nulls
+
+passwordChangedDuringCheckout= null && passwordChangeDate = null -> don't send to PE
+passwordChangedDuringCheckout= null && passwordChangeDate = today -> 2
+passwordChangedDuringCheckout= null && passwordChangeDate = date -> 3,4,5
+passwordChangedDuringCheckout= true && passwordChangeDate = null -> 2
+passwordChangedDuringCheckout= false && passwordChangeDate = null -> 1
+
+
+Ok
+
+
+
+"passwordChangedDuringCheckout"	X	
+
+Boolean	
+
+
+
+
+
+
+Ok
+
+
+
+"hasPassword"	
+X	
+
+
+
+
+
+Moved from fraudFields	
+
+
+
+
+"hasForgottenPassword"	
+X	
+
+
+
+
+Moved from fraudFields	
+
+
+
+
+"hadSuspiciousActivity"	X	
+
+Boolean	
+
+
+CUSTOMERACCOUNTSUSPICIOUSACCOUNTACTIVITY	0 = No suspicious activity has been observed 
+1 = Suspicious activity has been observed	
+OK
+
+
+
+"authentication"	X	
+
+
+
+
+
+
+
+Ok
+
+
+
+
+"utcTimestamp"	X	
+
+N12	
+
+
+CUSTOMERAUTHENTICATIONTOMERCHANTUTCTIMESTAMP
+
+(YYYYMMDDHHmm)
+
+
+
+Ok
+
+
+
+
+"method"	X	
+
+Enum (String)	
+
+
+CUSTOMERAUTHENTICATIONTOMERCHANTMETHOD
+
+CUSTOMERAUTHENTICATIONMERCHANTMETHOD
+
+CUSTOMERAUTHENTICATIONTOMERCHANTMETHOD
+
+GUEST
+
+1 = Guest Login
+
+MERCHANT_CREDENTIALS 
+2 = Login to the cardholder account at the 3DS Requestor system using 3DS Requestor’s own credentials 
+
+FEDERATED_ID
+3 = Login to the cardholder account at the 3DS Requestor system using federated ID 
+
+ISSUER_CREDENTIALS 
+4 = Login to the cardholder account at the 3DS Requestor system using issuer credentials 
+
+THIRD_PARTY_AUTHENTICATION 
+5 = Login to the cardholder account at the 3DS Requestor system using third-party authentication 
+
+FIDO_AUTHENTICATION 
+6 = Login to the cardholder account at the 3DS Requestor system using FIDO Authenticator
+
+
+
+Ok
+
+
+
+"paymentActivity"	X	
+
+
+
+
+
+
+
+Ok
+
+
+
+
+"numberOfPurchasesLast6Months"	X	
+
+N4	
+
+
+CUSTOMERACCOUNTNUMBEROFPURCHASESLASTSIXMONTHS	
+
+Ok (why in a non-logical order?)
+
+
+
+
+"numberOfPaymentAttemptsLast24Hours"	X	
+
+N3	
+
+
+CUSTOMERACCOUNTNUMBEROFTRANSACTIONSLAST24HOURS	
+
+Ok
+
+
+
+
+"numberOfPaymentAttemptsLastYear"	X	
+
+N3	
+
+
+CUSTOMERACCOUNTNUMBEROFTRANSACTIONSLASTYEAR	
+
+Ok
+
+
+
+"paymentAccountOnFileType"	X	
+
+Enum (String)	
+
+
+
+
+ACCOUNTTYPE	
+1 = Not Applicable
+
+2 = Credit 
+3 = Debit
+
+
+
+After "credit" you miss the =
+
+
+
+"paymentAccountOnFile"	X	
+
+
+
+
+
+
+
+Ok
+
+
+
+
+"numberOfCardOnFileCreationAttemptsLast24Hours"	X	
+
+N3	
+
+
+CUSTOMERACCOUNTNUMBEROFADDCARDATTEMPTSLAST24HOURS	
+
+
+Ok
+
+
+
+
+"createDate"	X	
+
+N8	
+
+
+CUSTOMERACCOUNTPAYMENTACCOUNTONFILECREATEDATE (YYYYMMDD)
+
+CUSTOMERACCOUNTPAYMENTACCOUNTONFILEAGEINDICATOR 
+
+We will determine the value of CustomerAccountPaymentAccountOnFileAgeIndicator based on this field and on the customer.accountType field
+
+CUSTOMERACCOUNTPAYMENTACCOUNTONFILEAGEINDICATOR 
+
+1 = No account (guest check-out) 
+2 = During this transaction 
+3 = Less than 30 days 
+4 = 30-60 days 
+5 = More than 60 days
+
+
+
+ACCOUNTTYPE = None && CREATEDATE today -> 1
+ACCOUNTTYPE = created && CREATEDATE today -> 2
+ACCOUNTTYPE = existing && CREATEDATE -> 3,4,5
+
+
+
+What with the nulls
+
+
+
+ACCOUNTTYPE = null && CREATEDATE = null -> don't send to PE
+ACCOUNTTYPE = null && CREATEDATE = date today -> 2
+ACCOUNTTYPE = null && CREATEDATE = date -> 3,4,5
+ACCOUNTTYPE = none && CREATEDATE = null -> 1
+ACCOUNTTYPE = created && CREATEDATE = null -> 2
+ACCOUNTTYPE = existing && CREATEDATE = null -> 3
+
+
+Ok
+
+
+"accountType"	X	
+
+Enum (String)	
+
+
+
+
+CUSTOMERACCOUNTTYPE (FRAUD-5890)	
+PE value - Connect value - description:
+
+1 - NONE - None (guest) 
+2 - CREATED - Account created during this transactions 
+3 - EXISTING - Account existing
+
+
+OK
+
+
+"companyInformation"	
+
+
+
+
+
+
+
+
+
+
+
+"vatNumber"	
+X	
+
+
+
+
+Moved from customer	NON 3DS V2	
+
+
+"device"	X	
+
+
+
+
+
+
+
+Ok
+
+
+
+"acceptHeader"	X	
+
+AN2048	
+
+
+DEVICEBROWSERACCEPTHEADER
+
+BROWSERACCEPTHEADER
+
+
+
+Ok
+
+
+
+"ipAddress"	
+X	
+AN45	
+
+
+DEVICEBROWSERIPADDRESS
+
+BROWSERIPADDRESS
+
+Moved from fraudFields and renamed (so also CUSTOMERIPADDRESS and IPADDRESSCUSTOMER)
+
+
+Ok
+
+
+
+"deviceFingerprintTransactionId"	
+X	
+
+
+
+
+Moved from fraudFields	
+
+
+
+
+"defaultFormFill"	
+X	
+
+
+
+
+Moved from fraudFields	
+
+
+
+
+"timezoneOffsetUtcMinutes"	X	
+
+AN6	
+
+
+DEVICEBROWSERTIMEZONEOFFSETMINUTES
+
+BROWSERTIMEOFFSETMINUTES
+
+Required in browserflow when javaScriptEnabled is true
+
+Offset in minutes
+
+
+Ok (although you used one sentence more)
+
+
+
+"locale"	X	
+
+AN8	
+
+
+BROWSERLOCALE	
+Required in browserflow when javaScriptEnabled is true
+
+Locale from device or browser
+
+
+Ok
+
+
+
+"userAgent"	X	
+
+AN2048	
+
+
+DEVICEBROWSERUSERAGENT
+
+BROWSERUSERAGENT
+
+Required in browserflow when javaScriptEnabled is true
+
+Is already part of the JSClientSDK ClientMeta data (let's grab it from there if we get it)
+
+Ronald Middelkoop Rob Spoor How can we grab this form our SDK?
+
+Ok
+
+
+
+"browserData"	X	
+
+
+
+
+
+Required in browserflow when javaScriptEnabled is true
+
+
+Ok
+
+
+
+
+"javaEnabled"	X	
+
+N1	
+
+
+BROWSERJAVAENABLED	
+Required in browserflow when javaScriptEnabled is true
+
+We should have the RPP populate this
+
+
+
+Ok (with the 'note")
+
+
+
+
+
+"javaScriptEnabled"	X	
+
+N1	
+
+
+BROWSERJAVASCRIPTENABLED
+
+Required in browserflow when javaScriptEnabled is true
+
+We should have the RPP populate this
+
+Rik van t HofFraud team states they will not support this field untill v2.2 is officially supported. Can we already sent it in? 
+
+We will already expose this field to the Merchant
+
+Ok
+
+
+
+
+"colorDepth"	X	
+
+N2	
+
+
+BROWSERCOLORDEPTH	
+Required in browserflow when javaScriptEnabled is true
+
+We should add these to the ClientMeta fields from our JSClientSDK
+
+Ronald Middelkoop Rob Spoor How can we grab this form our SDK?
+Ok (with the 'note')
+
+
+
+
+"screenHeight"	X	
+
+AN6	
+
+
+BROWSERSCREENHEIGHT	
+Required in browserflow when javaScriptEnabled is true
+
+We should add these to the ClientMeta fields from our JSClientSDK
+
+Ronald Middelkoop Rob Spoor How can we grab this form our SDK?
+Ok (with the 'note')
+
+
+
+
+"screenWidth"	X	
+
+AN6	
+
+
+BROWSERSCREENWIDTH	
+Required in browserflow when javaScriptEnabled is true
+
+We should add these to the ClientMeta fields from our JSClientSDK
+
+Ronald Middelkoop Rob Spoor How can we grab this form our SDK?
+Ok (with the 'note')
+
+
+
+
+"innerHeight"	X	
+
+AN6	
+
+
+BROWSERINNERHEIGHT (FRAUD-5890)	
+Relevant information to identify how our page is shown, We should add these to the ClientMeta fields from our JSClientSDK
+
+
+
+
+
+
+
+
+"innerWidth"	X	
+
+AN6	
+
+
+BROWSERINNERWIDTH (FRAUD-5890)	
+Relevant information to identify how our page is shown, We should add these to the ClientMeta fields from our JSClientSDK
+
+
+
+
+
+
+"contactDetails"	
+
+
+
+
+
+
+
+
+
+
+
+"mobilePhoneNumber"	X	
+
+
+
+
+MOBILEPHONENUMBER (FRAUD-6044)	
+
+
+
+
+
+
+"workPhoneNumber"	X	
+
+
+
+
+WORKPHONENUMBER (FRAUD-6044)	
+
+
+
+
+"fiscalNumber"	
+
+
+
+
+
+
+Description needs to be cleaned up (or actually expanded as it now only describes Brazil)	
+
+
+"shipping"	?	
+
+
+
+
+
+
+Ok
+
+
+"type"	X	
+
+Enum (String)	
+
+
+DELIVERYTIMEFRAMEINDICATOR	
+Electronic 
+Same day 
+Overnight 
+2-Day or more
+
+
+Remove the > behind "digital goods"
+
+
+"firstUsageDate"	X	
+
+N8	
+
+
+CUSTOMERACCOUNTSHIPPINGADDRESSFIRSTUSAGEINDICATOR
+
+CUSTOMERACCOUNTSHIPPINGADDRESSFIRSTUSAGEDATE (YYYYMMDD)
+
+Is new field, will be used to calculate CustomerAccountShippingAddressFirstUsageIndicator together with CustomerAccountShippingAddressFirstUsageDate
+
+CUSTOMERACCOUNTSHIPPINGADDRESSFIRSTUSAGEINDICATOR
+
+1 = This transaction 
+2 = Less than 30 days 
+3 = 30-60 days 
+4 = More than 60 days
+
+ISFIRSTUSAGE= True && FIRSTUSAGEDATE anytime -> 1
+ISFIRSTUSAGE= False && FIRSTUSAGEDATE today -> 2
+ISFIRSTUSAGE= False && FIRSTUSAGEDATE date -> 2,3,4
+
+What with the nulls
+
+
+
+ISFIRSTUSAGE= null && FIRSTUSAGEDATE = null -> don't send to PE
+ISFIRSTUSAGE= null && FIRSTUSAGEDATE = today -> 1
+ISFIRSTUSAGE= null && FIRSTUSAGEDATE = date -> 2,3,4 ISFIRSTUSAGE= true && FIRSTUSAGEDATE = null -> 1
+ISFIRSTUSAGE= false && FIRSTUSAGEDATE = null -> 2
+
+
+Ok
+
+
+"isFirstUsage"	X	
+
+Boolean	
+
+
+
+Ok
+
+
+"addressIndicator"	X	
+
+Enum (String)	
+
+
+SHIPPINGADDRESSINDICATOR
+
+CUSTOMERBILLINGSHIPPINGADDRESSMATCH (FRAUD-5953)
+
+Enum
+
+Same as Billing 
+Another verified address on File with merchant 
+Different than billing 
+Ship to store (shipping address = shop address) 
+Digital goods 
+Travel & event tickets not shipped 
+Other
+
+Note: We will not expose CustomerBillingShippingAddressMatch, but calculate it from the addressIndicator
+
+
+Ok
+
+
+"emailAddress"	X	
+
+AN70	
+
+
+SHIPPINGEMAILADDRESS
+
+DELIVERYEMAILADDRESS
+
+
+
+OK
+
+
+"address"	X	
+
+
+
+
+
+
+
+
+
+
+
+"additionalInfo"	
+X	
+
+
+
+
+Moved from order.customer.shippingaddress	
+
+
+
+
+"city"	
+X	
+
+
+
+
+Moved from order.customer.shippingaddress	
+
+
+
+
+"countryCode"	
+X	
+
+	
+Moved from order.customer.shippingaddress	
+
+
+
+
+"houseNumber"	
+X	
+
+	
+Moved from order.customer.shippingaddress	
+
+
+
+
+"name"	
+X	
+
+
+
+
+Moved from order.customer.shippingaddress.name	
+
+
+
+
+
+"firstName"	
+X	
+
+
+
+
+Moved from order.customer.shippingaddress.name	
+
+
+
+
+
+"surname"	
+X	
+
+
+
+
+Moved from order.customer.shippingaddress.name	
+
+
+
+
+
+"surnamePrefix"	
+X	
+
+
+
+
+Moved from order.customer.shippingaddress.name	
+
+
+
+
+
+"title"	
+X	
+
+
+
+
+Moved from order.customer.shippingaddress.name	
+
+
+
+
+"state"	
+X	
+
+
+
+
+Moved from order.customer.shippingaddress	
+
+
+
+
+"stateCode"	
+X	
+
+
+
+
+Moved from order.customer.shippingaddress	
+
+
+
+
+"street"	
+X	
+
+
+
+
+Moved from order.customer.shippingaddress	
+
+
+
+
+"zip"	
+X	
+
+
+
+
+Moved from order.customer.shippingaddress	
+
+
+
+"trackingNumber"	
+X	
+
+
+
+
+Moved from fraudFields and renamed (old name = shipmentTrackingNumber)	
+
+
+
+"comments"	
+X	
+
+
+
+
+Moved from fraudFields and renamed (old name = shipComments)	
+
+
+"shoppingCart"	?	
+
+
+
+
+
+
+
+
+
+"isPreOrder"	X	
+
+Boolean	
+
+
+PREORDERINDICATOR	
+
+
+
+Ok
+
+
+"preOrderItemAvailabilityDate"	X	
+
+N8	
+
+
+PREORDEREDITEMSAVAILABILITYDATE (YYYYMMDD)	
+
+Length of field is missing
+
+
+"giftCardPurchase"	X	
+
+
+
+
+
+
+
+Ok
+
+
+
+"amountOfMoney"	X	
+
+
+
+
+
+
+
+OK
+
+
+
+
+"amount"	X	
+
+N15	
+
+
+PURCHASEDGIFTCARDAMOUNT	
+
+Ok
+
+
+
+
+"currencyCode"	X	
+
+AN3	
+
+
+PURCHASEDGIFTCARDCURRENCYCODE	
+
+Ok
+
+
+
+"numberOfGiftCards"	X	
+
+N2	
+
+
+PURCHASEDGIFTCARDCOUNT	
+
+Ok
+
+
+"reOrderIndicator"	X	
+
+Boolean	
+
+
+REORDERITEMSINDICATOR	
+
+Ok
+"cardPaymentMethodSpecificInput"	
+
+
+
+
+
+
+
+
+
+"threeDSecure"	X	
+
+
+
+
+
+
+Ok
+
+
+"authenticationFlow"	X	
+
+Enum (String)	
+
+
+DEVICECHANNEL	
+01 → in-app = Consumer is using an app with a 3-D Secure SDK to complete the checkout
+02 → browser = Consumer is using a browser to complete the checkout (default)
+
+
+
+
+"sdkData"	X	
+
+
+
+
+
+Required in appflow	Appflow	
+
+
+
+"sdkAppId"	X	
+
+AN36	
+
+
+SDKAPPID	Required in appflow	Appflow	
+
+
+
+"deviceInfo"	X	
+
+AN64000	
+
+
+Field needs to be mapped in PE still ???	Required in appflow	Appflow	
+
+
+
+"deviceRenderOptions"	X	
+
+
+
+
+
+Required in appflow	Appflow	
+
+
+
+
+"sdkInterface"	X	
+
+Enum(String)	
+
+
+SDKINTERFACE	
+Required in appflow
+
+Lists all of the SDK Interface types that the device supports for displaying specific challenge user interfaces within the SDK.
+
+01 = native = Native
+02 = html = HTML
+03 = both = Both
+Appflow	
+
+
+
+
+"sdkUiType"	X	
+
+Enum (String)	
+
+
+SDKUITYPE	
+Required in appflow
+
+
+
+Lists all UI types that the device supports for displaying specific challenge user interfaces within the SDK.
+
+01 = text = Text
+02 = single-select = Single Select
+03 = multi-select = Multi Select
+04 = oob = OOB
+05 = html-other = HTML Other (valid only for HTML UI)
+Appflow
+
+
+
+
+
+"sdkEncryptedData"	X	
+
+AN64000	
+
+
+SDKENCDATA	Required in appflow	
+Appflow
+
+
+
+
+
+"sdkEphemeralPublicKey"	X	
+
+AN256	
+
+
+SDKEPEMPUBKEY	Required in appflow	
+Appflow
+
+
+
+
+
+"sdkMaxTimeout"	X	
+
+AN2	
+
+
+SDKMAXTIMEOUT	Required in appflow	
+Appflow
+
+
+
+
+
+"sdkReferenceNumber"	X	
+
+AN32	
+
+
+SDKREFERENCENUMBER	Required in appflow	
+Appflow
+
+
+
+
+
+"sdkTransactionId"	X	
+
+AN36	
+
+
+SDKTRANSACTIONID	Required in appflow	
+Appflow
+
+
+
+
+
+????	X	
+
+
+
+
+SDKCOUNTERSTOA	Field seems to be in PE SDD, but not yet mapped on our end	Appflow	
+
+
+"priorThreeDSecureData"	X	
+
+
+
+
+
+
+
+Ok
+
+
+
+"method"	X	
+
+Enum (String)	
+
+
+PRIORTHREEDSMETHOD	
+Field that need to be stored by merchant from 3DS response fields
+
+Enum
+1 - frictionless
+2 - challeged
+3 - verified
+4 -  other
+
+
+Ok
+
+
+
+"utcTimestamp"	X	
+
+N12	
+
+
+PRIORTHREEDSUTCTIMESTAMP (YYYYMMDDHHmm)	
+“NaN”
+
+Field that need to be stored by merchant from 3DS response fields
+
+
+Ok
+
+
+
+"acsTransactionId"	X	
+
+AN36	
+
+
+PRIORTHREEDSACSTRANSACTIONID	Field that need to be stored by merchant from 3DS response fields	
+Ok
+
+
+
+"authenticationData"	
+
+
+AN2048	
+
+
+PRIORTHREEDSDATA	Field that need to be stored by merchant from 3DS response fields	This field needs to be removed from domain, gcs domain converter and tests	
+
+
+"challengeIndicator"	X	
+
+Enum (String)	
+
+
+THREEDSAUTHENTICATIONCHALLENGEINDICATOR (FRAUD-5953)	
+Enum
+
+No preference 
+No challenge requested 
+Challenge requested 
+Challenge required
+
+
+Ok
+
+
+"challengeCanvasSize"	X	
+
+Enum (String)	
+
+
+CHALLENGEWINDOWSIZE (FRAUD-5923)	
+CHALLENGEWINDOWSIZE
+
+Enum
+
+1 = 250x400
+2 = 390x400
+3 = 500x600
+4 = 600x400
+5 =full-screen
+
+
+
+
+
+
+"returnUrl"	
+X	
+
+
+
+
+Moved from cardPaymentMethodSpecificInput
+
+Only available for Create Payment, not for Create Hosted Checkout! There the returnUrl is sent in as part of the hostedCheckoutSpecificInput
+
+
+
+
+
+"skipAuthentication"	
+X	
+
+
+
+
+Moved from cardPaymentMethodSpecificInput	
+
+
+
+"externalCardholderAuthenticationData"	
+X	
+
+
+
+
+Moved from
+
+cardPaymentMethodSpecificInput.externalCardHolderAuthenticationData
+
+
+
+
+
+
+"cavv"	
+X	
+
+
+
+
+Moved from cardPaymentMethodSpecificInput.externalCardHolderAuthenticationData	
+
+
+
+
+"cavvAlgoritm"	
+X	
+
+
+
+
+Moved from cardPaymentMethodSpecificInput.externalCardHolderAuthenticationData	
+
+
+
+
+"eci"	
+X	
+
+
+
+
+Moved from cardPaymentMethodSpecificInput.externalCardHolderAuthenticationData	
+
+
+
+
+"validationResult"	
+X	
+
+
+
+
+Moved from cardPaymentMethodSpecificInput.externalCardHolderAuthenticationData	
+
+
+
+
+"xid"	
+X	
+
+
+
+
+Moved from cardPaymentMethodSpecificInput.externalCardHolderAuthenticationData	
+
+
+
+
+"directoryServerTransactionId"	X	
+
+AN36	
+
+
+DIRECTORYSERVERTRANSACTIONID (FRAUD-5839 for GOS)	
+
+
+
+
+
+"threeDServerTransactionId"	X	
+
+AN36	
+
+
+
+
+THREEDSSERVERTRANSACTIONID	
+
+
+
+
+
+"threeDSecureVersion"	X	
+
+Enum (string)	
+
+
+THREEDSPROTOCOLVERSION (FRAUD-5839 for GOS)
+
+Enum values:
+
+(connect - PE)
+
+v1 = 1.0.0
+v2 = 2.1.0
+
+
+
+
+"customerReference"	
+
+X	
+
+
+
+Leave as is	
+Field is to unclear, will just leave as is
+
+
+
+"unscheduledCardOnFileSequenceIndicator"	
+X	
+
+
+
+
+Renamed from unscheduledCardOnFileIndicator	
+
+
+"recurring"	X	
+
+Object	
+
+
+
+
+
+
+
+
+"endDate"	X	
+
+N8	
+
+
+RECURRINGEXPIRY (needs to be added to PE to support recurring transactions, we can assume this will be added)
+
+Date in YYYYMMDD after which there will be no further charges.	Needs to be added to both Connect and PE.	
+
+
+"minFrequency"	X	
+
+N4	
+
+
+RECURRINGFREQUENCY (needs to be added to PE to support recurring transactions; we can assume this will be added)	Minimum number of days between authorizations.	
+
+
+
+"recurringPaymentSequenceIndicator"	
+X	
+Enum (string)	
+
+
+
+Moved from cardPaymentMethodSpecificInput	
+
+
+
+Please note that all the deprecated fields have not been deprecated in the underlying Payment Engines and thus these PE fields will need to be populated using some of the new fields. In some cases this isn’t possible and we are really deprecating fields, but these require more investigation.
+
+Create payment and Create hosted checkout response fields
+This data is based on the json proposal as written by Rik van t Hof and Ronald Middelkoop and looked over by Petra Steenstra
+
+The description in regards to the field ONLY covers the fields represented in our public API. The deprecated, moved and new fields are for both the Create Payment Response and the Create Hosted Checkout Response.
+
+All noted requiredness and types are as represented in our API, this does not neccesarily reflect the requiredness for the PE fields.
+
+Please note that these fieldmappings are by all means NOT complete, only all touched fields are represented in this table (and some extra existing fields).
+
+Any red field is not (yet) exposed to the Merchant as per the implementation of the Browser flow will be phase 1.
+
+Requiredness and type on all fields that move stays the same as they were before, this is why these properties are not detailed on the deprecated/moved fields.
+
+Missing: CUSTOMER3DREF, ACSREFNUMBER and ACSCHALLENGEMANDATED.
+
+
+
+
+
+Field name	Field	Scope	PE Field	Remarks	Extra input needed from
+New	Moved	Deprecated	Type
+"payment"	
+
+
+
+
+
+
+
+
+"paymentOutput"	
+
+
+
+
+
+
+
+
+
+"cardPaymentMethodSpecificOutput"	
+
+
+
+
+
+
+
+
+
+
+"threeDSecureResults"	
+
+
+
+
+
+
+
+
+
+
+
+"sdkData"	X	
+
+
+
+
+
+Required for App flow	
+
+
+
+
+
+"sdkTransactionId"	X	
+
+AN36	
+
+
+SDKTRANSACTIONID
+Required for App flow	
+
+
+
+
+"threeDSecureData"	X	
+
+
+
+
+
+
+
+
+
+
+
+
+"acsTransactionId"	X	
+
+AN36	
+
+
+ACSTRANSACTIONID (FRAUD-5839 for GOS)
+
+
+
+
+
+
+
+
+
+
+"authenticationData"	X	
+
+AN2048	
+
+
+CUSTOMERTHREEDAUTHENTICATIONDATA
+
+CUSTOMER3DDATA
+
+Merchant should map to PRIORTHREEDSDATA
+
+Field will not be implemented since unclarity between 3DS V2.1 and V2.2 (and follow up versions)
+
+
+
+
+
+
+
+"method"	X	
+
+Enum (string)	
+
+
+CUSTOMERTHREEDMETHOD (FRUAD-5839 for GOS)	Merchant should map to PRIORTHREEDSMETHOD	
+
+
+
+
+
+"utcTimestamp"	X	
+
+N12	
+
+
+CUSTOMERTHREEDDATE (YYYYMMDDHHmm) (FRAUD-5839 for GOS)	Merchant should map to PRIORTHREEDSUTCTIMESTAMP	
+
+
+
+
+"directoryServerTransactionId"	X	
+
+AN36	
+
+
+DIRECTORYSERVERTRANSACTIONID	
+
+
+
+
+
+"threeDServerTransactionId" (old: "transactionId")	X	X	
+AN36	
+
+
+THREEDSSERVERTRANSACTIONID (FRAUD-6059)	This was first created as transactionId, must be the new name	
+
+
+
+
+"threeDSecureVersion"	X	
+
+Enum (string)	
+
+
+
+
+THREEDSPROTOCOLVERSION
+
+Enum values:
+
+(Connect - PE)
+
+v1 - 1.0.0
+v2 - 2.1.0
+
+
+
+"statusOutput"	
+
+
+
+
+
+
+
+
+
+"statusUtcTimestamp"	X	
+
+
+
+
+<Should still be mapped in PE>
+
+proposal: STATUSUTCTIMESTAMP
+
+"I think we need to add this field to help merchants deal with API vs webhook messages"	
+
+
+"merchantAction"	
+
+
+
+
+
+
+
+
+"mobileThreeDSecureChallengeParameters"	X	
+
+
+
+
+Only included when a challenge is required for an in-app transaction	
+Required for App Challenge flow
+
+Use in merchantAction; MOBILE_THREEDS_CHALLENGE
+
+
+
+
+"threeDServerTransactionId"	X	
+
+AN36	
+
+
+THREEDSSERVERTRANSACTIONID	
+Required for App Challenge flow
+
+Use in merchantAction; MOBILE_THREEDS_CHALLENGE
+
+
+
+
+"acsTransactionId"	X	
+
+AN36	
+
+
+ACSTRANSACTIONID	
+Required for App Challenge flow
+
+Use in merchantAction; MOBILE_THREEDS_CHALLENGE
+
+
+
+
+"acsReferenceNumber"	X	
+
+AN32	
+
+
+ACSREFERENCENUMBER (was removed during earlier refinement session, so might not exist anymore in PE)	
+Required for App Challenge flow
+
+Use in merchantAction; MOBILE_THREEDS_CHALLENGE
+
+
+
+
+"acsSignedContent"	X	
+
+JWS Object	
+
+
+ACSSIGNEDCONTENT (does not exist yet in PE it seems)	
+Required for App Challenge flow
+
+Use in merchantAction; MOBILE_THREEDS_CHALLENGE
+
+
+
+"showData"	
+
+
+
+
+
+
+
+
+
+"key"	
+
+
+
+
+
+
+
+CARDHOLDERINFO	Literal value "CARDHOLDERINFO"	
+
+
+"value"	
+
+
+
+merchantAction.actionType will be SHOW_TRANSACTION_RESULTS	
+
+
+Detailed Connect Flows and Implementation
+By Leon Stemerdink; Work in Progress.
+
+The flows in this section may contain elements in red (notes and label texts). These elements have not yet been fully refined, or are questions about. Also the flows may not be fully shown to the end. I believe this is due to a bug/error/misconfiguration with the PlantUml plugin. At a later stage I will make sure images are added to this page in order to show the full diagrams. (For now it is easier to have the code of the diagrams here as this allows me to make changes more easily.)
+
+Connect 3DV2 s2s flows
+3d v2 (happy) flow with method and challenge
+
+
+3dv2 (happy) flow with method url and no challenge
+
+
+3dv2 (happy) flow with no method URL and challenge
+
+
+3dv2 (happy) flow with no method url and no challenge
+
+
+3dv2 (unhapy) flow with method URL and tech glitch
+
+
+
+
+
+
+
+Connect Server-to-Server 3DSv2 flow, with Method URL
+The flow diagram below shows the 3DSv2 flow for merchants implementing payments via the server-to-server API (so no Hosted Checkout). 
+
+@startuml
+
+skinparam sequence {
+	ArrowColor Black
+	ActorBorderColor Black
+	LifeLineBorderColor Black
+	
+	ParticipantBorderColor Black
+}
+
+title Connect 3DSv2 flow with Method URL
+
+actor 		"Client browser" as cb
+participant "Merchant server" as mse
+participant RPP
+participant "Hazelcast (3DS session)" as hc
+participant Gateway as gw
+participant PE
+participant "3DS-server" as 3ds
+participant "ACS/Issuer" as acs
+
+
+3ds->acs:		PReq
+acs-->3ds:		3DSv2 with methodUrl
+note right of 3ds
+	Initialisation of 3DS version and
+	methodUrl availibility per issuer.
+	The information exchanged here is
+	expected to be cached by the 3ds server.
+end note
+note over cb
+	In order to indicate what domain(s) is (are) currently
+	active in the browser the following colors are being used:
+	<font color=orange>- Merchant's site = Orange</font>
+	<font color=green>- RPP page = Green</font>
+	<font color=blue>- Method page = Blue</font>
+	<font color=purple>- Challenge page = Purple</font> 
+end note
+activate cb #Orange
+cb->mse:			Checkout
+mse-->cb:			Show CC Detail page
+cb->cb:				Fill in Card details
+cb->mse:			Submit CC Details
+mse->gw:			Create Payment
+note right of mse
+	This Create Payment call should
+	already contain as many of the
+	new fields as the merchant can
+	provide.
+	Also they should provide a returnurl
+	that Connect will use to send the
+	consumer back to their site, once the
+	3DS authentication has finished.
+end note
+gw->PE:				INSERT_ORDER_WITH_PAYMENT
+note right of gw
+	Connect provides AReq values here.
+end note
+PE->3ds:			Determine 3DS version
+3ds->3ds:			Retrieve cached info
+3ds-->PE:			methodUrl
+PE-->gw:			DO_PAYMENT Response
+note right of gw
+	Containing:
+	- Status 50
+	- methodUrl
+end note
+gw->gw:				Create HC Session
+note right of gw
+	The merchant is expected to
+	redirect to this session.
+end note
+gw-->mse:			Create Payment Response
+note right of mse
+	Containing:
+	- Status 50
+	- MerchantAction with:
+		- Type REDIRECT
+		- HC Session URL
+end note
+mse-->cb:			Redirect to RPP URL
+cb->RPP:			Load RPP URL
+deactivate cb
+RPP->gw:			Get session data
+gw-->RPP:			Session data
+RPP->hc:			Create 3DS Session
+note over hc
+	This session will:
+	- Contain a Transaction ID
+	- Contain the Payment ID
+	- A TimeStamp, partially for validating 10 seconds have passed
+	- Keep track of notifications received
+end note
+hc-->RPP:			Transaction ID
+RPP-->cb:			RPP 3DSv2 page
+loop until ThirdPartyStatus == COMPLETED
+	activate cb #green
+	note right of cb
+		From here on the Merchant's page is expected to start performing a periodic Poll for 
+		the ThirdPartyStatus, indicated by the Green activation. The goal of the polling is 
+		to know when the ACS method has finished processing, and to find out whether a challenge 
+		is required, or that the payment is finished. The statusses that can be returned are:
+		- <b>WAITING</b> Payment is still in progress
+		- <b>CHALLENGE</b> There is a 3DS Challenge required
+			In this case the Challenge information is also provided
+		- <b>COMPLETED</b> The payment has concluded
+	end note
+	cb-[#green]>gw:		get ThirdPartyStatus
+	gw->PE:				Check Payment Status
+	PE-->gw:			Status = 50
+	gw->hc:				Check 3DS session
+	hc-->gw:			No changes
+	gw-[#green]->cb:	ThirdPartyStatus = WAITING
+end
+cb-[#blue]>acs:		POST to the MethodUrl
+activate cb #Blue
+note right of cb
+	POST contains:
+	- 3DS method notification URL
+	- Transaction ID
+end note
+acs-[#blue]->cb:	return Method page
+cb-[#blue]>acs:		data collection
+alt Notification received
+	cb-[#blue]>RPP:	Method finished notification
+	RPP->hc:		Update cache\nNotification received
+deactivate cb #Blue
+	cb-[#green]>gw: get ThirdPartyStatus
+	gw->PE:			Check Payment Status
+	PE-->gw:		Status = 50
+	gw->hc:			Check 3DS session
+	hc-->gw:		Notification received
+	gw-[#green]->cb:ThirdPartyStatus = WAITING
+else No notification after 10 seconds
+	note over RPP
+		No Notification was received
+		in this scenario.
+	end note
+	RPP->RPP:	10 Seconds passed
+	RPP->hc:	Update cache\n<font color=red>Timed out?</font>
+activate cb #Blue
+	note over cb
+		Actually it is unclear here what the activity status
+		of the method URL is. It is not notifying, so 
+		probably something went wrong in the Method.
+	end note
+destroy cb #Blue
+	cb-[#green]>gw: get ThirdPartyStatus
+	gw->PE:				Check Payment Status
+	PE-->gw:			Status = 50
+	gw->hc:				Check 3DS session
+	hc-->gw:			No changes
+	gw-[#green]->cb:ThirdPartyStatus = WAITING
+end
+RPP->gw:			Start authentication, Transaction ID included
+gw->PE: 			DO_AUTHENTICATE
+PE->3ds
+3ds->acs:			AReq
+acs-->3ds:			ARes
+3ds-->PE
+alt DO_AUTHENTICATE Response contains challenge
+	PE-->gw:		DO_AUTHENTICATE Response
+	note right of gw
+	Containing:
+	- Paymentstatus 50
+	- merchantAction REDIRECT
+	- ACSurl
+	- Base64 formatted CReq
+	end note
+	gw->gw:			Cache redirect data\nin Redirector cache
+	gw-->RPP:		Authentication response
+	note right of RPP
+		Contains the Redirector URL, which was
+		created on caching the redirect data
+	end note
+	RPP->hc:		Store Redirector URL
+	cb-[#green]>gw:	get ThirdPartyStatus
+	gw->PE:				Check Payment Status
+	PE-->gw:			Status = 50
+	gw->hc:				Check 3DS session
+	hc-->gw:			Redirector URL available\n(therefore challenge required)
+	gw-[#green]->cb:	ThirdPartyStatus = CHALLENGE, also contains Redirector URL
+	cb-[#green]>RPP:	Redirect to Redirector URL
+	RPP->gw:			Retrieve Redirect data\nWith key that is in URL (This is existing functionality)
+	gw-->RPP:			Redirect data
+	RPP-[#green]->cb:	Redirect form post
+	note right of cb
+		The RPP will POST to an external page 
+		here to have the issuer serve the Challenge interface. Actions
+		of this page are depicted in purple. 3rd party status polling
+		will stop here.
+	end note
+	deactivate cb #green
+	cb-[#purple]>acs:		Load the CReq URL
+	activate cb #purple
+	acs-[#purple]->cb:		Authentication page
+	cb-[#purple]>acs:		Provide authentication
+	acs->3ds:				RReq
+	note right of 3ds #FFAAAA
+		Do we do something with this
+		RReq?
+	end note
+	3ds-->acs:				RRes (Ack RReq Received)
+	acs-[#purple]->cb:		Initiate CRes
+	cb-[#purple]>RPP:				CRes
+	deactivate cb #purple
+	note right of RPP
+		The URL where this CRes should be posted to
+		will be a new 3DsReturnServlet.
+	end note
+	RPP->hc:			Update cache
+	RPP->gw:			trigger finalize payment
+	gw->PE:				PROCESS_RETURNED_CONNECT
+	PE-->gw
+	gw-->RPP
+	RPP-[#green]->cb:	Redirect to merchant\n(Or result page)
+	activate cb #green
+else DO_AUTHENTICATE Response Does not contain Challenge (Frictionless)
+	PE-->gw:		DO_AUTHENTICATE Response
+	note right of gw3ds
+	Containing:
+	- Paymentstatus >= 600
+	end note
+	gw-->RPP:		Authentication response
+	RPP->hc:		Update cache
+	RPP-[#green]->cb:Direct to merchant/n(or result page)
+	cb-[#green]>gw:	get ThirdPartyStatus	
+	gw->PE:				Check Payment Status
+	PE-->gw:			Status >= 600
+	gw-[#green]->cb:ThirdPartyStatus = COMPLETED
+	cb->RPP:			Request redirect to merchant
+	RPP-->cb:			Redirect to merchant
+end
+cb->mse:			Load merchant page
+deactivate cb
+mse->gw:			get Payment Result
+gw->PE:				get Payment
+PE-->gw:			Payment
+gw-->mse:			payment result
+mse-->cb:			Result page
+activate cb #orange
+
+
+Hosted3DsHandling for S2S merchants ("new" Hosted Checkout session)
+A major component in this flow is the Hosted Checkout session that is used to handle the Method and Challenge flow of 3DSv2. Because we want to make integrating with 3DSv2 as easy as possible for merchants, we will handle all of the complicated steps for them in a Hosted Checkout session for them. All merchants will have to do is redirect to this session, and retrieve the payment details as soon as their customer has been redirected back to their website. This has the added benefit that the 3DSv2 changes will not be breaking for merchants.
+
+If, as a result of payment creation, a methodUrl is returned with payment status 50, a Hosted Checkout session will be created and the session url will be provided in the create payment response as a MerchantAction REDIRECT to the merchant. Merchants should know and have implemented this MerchantAction already for 3DSv1. 
+
+After the redirect the Hosted Checkout session will take care of executing the issuer's Method and a possible challenge in a new page. This page will at first host an iFrame in which the MethodUrl will be loaded as per the 3DSv2 specifications. While the MethodUrl is being loaded and executed, in the background JavaScript will be performing a polling call to the get ThirdPartyStatus endpoint in order to be notified when the Method execution has finished. If this is the case one of two statusses might be returned.
+
+1) COMPLETED This means that PE has performed the 3DSv2 AReq call, and immediately after performed a payment. This means that after Method execution the Authorization call did NOT return a challenge (Frictionless). The consumer should be returned to the merchant via the redirectUrl. Note that even though the ThirdPartyStatus is COMPLETED, this does not necessarily mean that the payment itself was successful, it may have failed.
+
+2) CHALLENGE This means that PE has performed the 3DSv2 AReq call and received a challenge in the response. In this case the consumer is required to provide (extra) authentication information on the domain of the issuer. In this case the ThirdPartyStatus response will also contain a redirectUrl to the issuer's domain, where the challenge should be executed by the consumer. (This URL is where the CReq will be posted to and we will receive it from PE in the DO_PAYMENT response, along with the actual CReq.) The JavaScript will make sure that the consumer is redirected to this URL. JS-less?
+
+Once this is all done we will redirect the consumer back to the merchant's website, after which the merchant is expected to get the payment result via the S2S API and show the consumer the payment status. In order to redirect back the merchant will have to provide a returnUrl  in cardPaymentMethodSpecificInput.returnUrl in the create payment call. Unfortunately this field is not required. Therefore we should show the RPP's result page instead when the url was not provided.
+
+New Servlet Implementation Details
+In order to support requests for the new Hosted session a new servlet will have to be set up. This servlet should be called something like threeDsServlet. It does NOT have to extend AbstractLockingMechanismServlet, as there is no need to use the Locking Mechanism for the 3DSv2 flow. (Consumers will not be able to provide any input on our domain in the first place. All is handled by JavaScript in the background.) The path for this servlet should be {base}/3ds/{hosted checkout token}. Note that this endpoint is for the S2S flow ONLY, the RPP will handle 3DSv2 within its flow, on the normal {base}/checkout/<page>/{hosted checkout token} endpoint.
+The Hosted Checkout session itself will be a new session like HostedMandateManagementSession is for Hosted Mandates. The name of this new session should be: Hosted3DsSession. It should be an extension of the RppHostedSession class. This session should get its own new HazelCast cache instance, managed by the RPP like the other Hosted Sessions.
+Just as with the other RPP Servlets this one should work with the Task-/PageController mechanism. The flow charts below show what their logic should be. Insert image here
+
+The TaskController should be executed on POST requests. The PageController should be invoked on GET requests.
+Exception: the merchant will initially perform a GET request for this Hosted Session. We should recognize such an initial call in the GET method of the Servlet to start Session initialization. 
+New 3DS Session Cache Details
+This is not the same cache as is required for the new Hosted Checkout status. This cache will keep track of the 3DS session data, which contains the following information:
+TransactionId - This is the Transaction ID as defined by the 3DSv2 spec. This is the ID that the cache will be keyed on.
+PaymentId - This is the Connect (PE) payment ID.
+Start3DsSession - This is the timestamp when the cache entry was created. This timestamp is important to be able to validate whether 10 seconds have passed yet since starting the MethodUrl flow.
+MethodNotificationReceived - This boolean value indicates whether the Method execution has finished and whether a notification was received on the notification endpoint.
+ChallengeRedirectUrl - This is the URL that the RPP will have to redirect to when a challenge is received. The URL will point to the redirector service in the RPP backend. It will be added after the ARes was received and a Challenge is required.
+New RPP Page Implementation Details
+This new page will simply show a loading spinner as long as the Method is being executed and the backend is determining the Authentication result. 
+It has to contain the iFrame in which the Method will be loaded and executed. In order to load the Method a POST request must be made to the Method URL, containing the following information:
+TransactionId - This is the Transaction ID as defined in the 3DS spec, and the key to the 3DS Session Cache.
+MethodNotificationUrl - This is the URL where the Notification endpoint in our system lives. The Method page will make sure a POST request is send to this endpoint, containing the TransactionId. 
+Example:
+
+{
+	"threeDSMethodData": {
+		"threeDSServerTransID": "xxxx ...",
+		"threeDSMethodNotificationURL": "https://www.notifyme.example.com"
+	}
+}
+		
+
+
+It will have to poll for the ThirdPartyStatus with JavaScript once every 3 seconds. It should respond as such:
+WAITING - The Method is still executing and there is nothing that can currently be done.
+CHALLENGE - The Method has finished, and the Authentication has been executed, resulting in a challenge. Challenge data will be included in the 3rd party response. In that challenge data a url will be included . Redirect the user to the URL.
+COMPLETED - The payment has finished. Post to the backend, so that it knows to redirect the user to the merchant.
+When JavaScript is turned off it should have a meta-refresh tag that triggers after 10 seconds. 
+New Notification endpoint
+This endpoint should be capable of receiving the notification that is sent after the Method has been executed in the consumers browser. Once it has been received the 3DS Cache should be updated and the DO_AUTHENTICATE should be triggered. 
+
+ In order to be able to trigger that DO_AUTHENTICATE call, there should be a new RPP2S API created. The endpoint should be: POST payments/{paymentId}/3dsAuthenticate on the RPPHostedCheckoutBD.
+Gateway changes Implementation Details
+The Gateway must be able to create a new 3DS Hosted Checkout Session if it receives a THREEDSMETHODURL in the INSERT_ORDER_WITH_PAYMENT response. The data for this session will have to be temporarily cached until it has been retrieved by the RPP via the Init call. Once this is done the data should be removed from the cache, the RPP will take care of this init data in its cache from here on. 
+The URL for this session should be returned to the merchant in a MerchantAction object with MerchantActionType REDIRECT.
+The Gateway will get an authenticate API on the rpp2s BD. The RPP will call this endpoint when a notification has been received or the timer has expired. This will trigger the Gateway to call the DO_AUTHENTICATE API on PE. 
+The Gateway needs to implement the DO_AUTHENTICATE call with PE. This call will cause PE to initiate the AReq call with the 3DS-Server and eventually the ACS/Issuer. When we receive the response to this call the result can contain two outcomes:
+Challenge required - This means that the consumer will have to perform a challenge with their cards issuer. The Challenge is performed by a redirect, which Connect will handle like all redirects not done via ORB. In this case Connect will receive a CReq URL from PE and a CReq body and a method in the REDIRECTINFO. 
+This data should be cached in the Gateway, in the redirectorCache.
+When storing to that cache, a URL to the Redirector Servlet will be created. This URL will be provided in the RPP2S Authenticate response. (The RPP will then store it in the 3DS cache.)
+No Challenge - This means that the ARes from the issuer indicated that the authentication is in order, and that the payment can be made. PE will have done so and provide us with the payment output in the DO_AUTHORIZE response. 
+Extra Third Party Status mapping
+The ThirdPartyStatus enum will have to get an extra value: CHALLENGE. Next to that, the response object should be extended with an extra field for the Challenge that can be returned for 3DSv2. This information has to be provided when the status is CHALLENGE. This field is currently only for internal use, so it should be hidden from the documentation. 
+The field that should be returned is RedirectorUrl. This URL will redirect to the Redirector Service, which will in turn handle the redirect to the Challenge endpoint.
+Make sure that the CHALLENGE status is NOT returned for other payment products that use the ThirdPartyStatus call (at the moment of writing these are BanContact and WeChat).
+This ThirdPartyStatus will, like WeChat pay, be mapped to the results in the Get Order Status call, but also to information we have already received. The mapping will be as such:
+
+ThirdPartyStatus	Details
+WAITING	Payment Status 50 or lower
+CHALLENGE	Payment Status 50 and Redirector URL in 3DS session cache
+COMPLETED	Payment Status as PS where ((PS > 60 && PS <= 200) || PS >= 600) 525?
+
+
+Q&A
+Questions resulting from earlier text are marked both in the text above and in the question below with qn
+
+Question 1	Will 3DS v2 support 2-step?
+Background of the question	
+This won't have an immediate impact but will have to be made clear in the documentation of 2-step and 3DS v2's upgrade page4.
+
+Addressee	
+Rik van t Hof
+
+Answer	
+Yes
+
+Why	
+Just as with 3Dv1 merchants can chose to do their authentication elsewhere and just submit the results to us. This means that the process can start in the middle (after authentication has taken place) and I expect that some merchants want to have an equal amount of control of the flow as they had in the past. The use case for enabling 2-step 3D in Connect was actually a workaround for PCI compliant merchants to control the acquirer re-try logic in our payment engine. The selection of the acquirer to use for the authorization doesn't take the authentication into the mix. Authentication is always done against a specific MID at a specific acquirer, so the authorization of a fully authenticated transaction should only be done at that acquirer (and with that MID), but the payment engine routing logic doesn't that this into account. These merchants have two accounts setup in our system, one with the authentication specific acquirer (and no other acquirers) and one with multiple acquirers to maximize the authorization rate with re-tries in case of technical failures or soft-declines.
+
+The logic in the payment engine regarding re-tries and routing hasn't changed and thus these merchant will require this logic to also be available for 3Dv2.
+
+
+
+Question 2	Will PE return the ARes result in the poll and/or createPayment result?
+Background of the question	
+Is the AReq triggered during IOWP before PE returns a response or is an additional step needed from Connect? I assume PE will automatically do this if 3DS v2 is used and the issuer doesn't provide a method URL.
+
+The same goes for polling. Will the ARes be triggered after getting the push from the issuer? If so, I assume the polling will continue until the AReq is received and PE has determined if a challenge has been issued.
+
+Or will the poll / IOWP response indicate that a PE call needs to be done to trigger the ARes?
+
+If the latter is the case, I'd let Connect automatically trigger it in the Gateway, instead of letting it get back to the merchant/consumer.
+
+Addressee	Rik van t Hof
+Answer	
+Two cases exist:
+
+No-MethodURL returned in PReq by 3DServer
+In this case Payment Engine should automatically continue with the AReq (if all required fields have been supplied) and thus the response to the IOWP will contain the response of the AReq. In case not all required fields have been returned, but a fall-back to v1 is possible, the payment engine should trigger the 3Dv1 flow.
+MethodURL returned in PReq by 3DServer
+In this case the AReq hasn't happened yet as the MethodURL flow first needs to be completed. The notification of the completion of the MethodURL assessment will come back to the RPP and this will trigger the Gateway to submit a DO_AUTHENTICATE API call towards payment engine. This will trigger the AReq and the response to this API will contain the AReq results.  
+Why	In neither of these case do we provide control back to the merchant to trigger the AReq (even though this could be technically possible in option 2). We have specifically decided not to expose this functionality in that way. The reason why is that we don't want to introduce any new status for transactions for which the methodURL part has been completed, but the actual authentication (AReq with possible Challenge) has not been completed. We also don't want to create New API calls that merchants would have to use to trigger the authentication step after the MethodURL step has been completed. All new statuses and new APIs would mean significant effort on the side of the merchant and they won't have enough time to deal with these changes. Besides the merchants we would also have to update WPC, webhooks and other reporting tools to deal with any new status.
+
+
+Question 3	How will we allow the merchant to provide 200+ datapoints?
+Background of the question	
+The result of an AReq is based on datapoints but it can hardly be expected of merchants to provide all of them.
+
+However, the frictionless flow can only occur if the issuer is sure enough that the used card belongs to the consumer.
+
+If the method-url flow is unlikely to be used, should we start suggesting to merchants to send in as much data as possible for each card payment? Will the existing fields be enough for this? Should we expose additional fields or a list of key/values?
+
+Following the data-structure provided by EMVCo's 3-D Secure Device Information SDK (found here) seems best.
+
+Addressee	Rik van t Hof
+Answer	
+From the meeting on 31-10-2018 Yes, most likely there will be more fields needs to be implemented.
+
+We know that at least the browser linked fields will need to be provided as well as the size of the potential challenge window. Alternatively we could say that the consumer doesn't support JavaScript and default to the most suitable canvas size for the challenge (potentially based on the template used in the RPP).
+
+PS The data structure provided by EMVCo in their 3-D Secure Device Information SDK documentation that is linked in the question is regarding the in-app flow using a native SDK. This flow is out of scope at this moment.
+The existing + the new fields should cover all the necessary data points that a merchant could (and maybe should) collect and send to us. 
+
+Why	Our existing structure already contains a lot of needed data elements. With the additional new data elements that we are adding to the API we cover all the necessary datapoint to be captured.
+Follow-up question	
+Q3 followup question: What fields need to be implemented?
+
+These are specified in the new API outline on this page.
+
+
+
+Question 4	How will the in-app multiple-challenges flow go?
+Background of the question	
+If the consumer faces multiple challenges in a mobile app, will the flow be as below?
+
+Connect receives from PE a challenge request
+Connect shows challenge
+Consumer fills in challenge
+Connect sends answer to challenge (obfuscated?) to PE
+PE receives another challenge from issuer.Go to 1.
+PE receives a challenge result from issuer. Go to 6.
+Challenge result can be either OK or NOK.
+Or will the challenges flow directly between app and issuer?
+
+If the former, Connect can hook into the response and handle it the same as a browser-challenge result.
+
+If the latter, Connect will need to poll as with the method URL to know when to let the consumer continue.
+
+Addressee	Rik van t Hof
+Answer	
+From the meeting on 31-10-2018 Disect into existing sdk.
+
+This is not an answer regarding the in-app multiple-challenges flow.
+
+During the meeting the answer came that no thought was given yet to how the flow will go with the apps on this area.
+
+Why	
+
+
+Question 5	Will we need to write a 3DS v1 > v2 upgrade page for the dev portal?
+Background of the question	Merchants might like it if we document how they can go about upgrading their 3DS flow.
+Addressee	
+Petra Steenstra
+
+Answer	
+Yes, but we will need to describe the working of 3D regardless of the version, as the two versions will co-exist in the future. Merchant will have to deal with both v1 and v2 flow and datapoints at the same time. Rik van t Hof started writing text already on Confluence. 
+
+Why	Merchants are craving for more detailed information regarding the impact of 3Dv2 on them. We will need to educate them and documentation on the dev portal is one of the ways to do so in detail.
+
+
+Question 6	What is Ogone planning for 3DS v2?
+Background of the question	It would be good if Ogone and GlobalCollect could align on this so that Connect can support both PEs with a single, simple API for the merchants. Else we might get issues with Ogone requiring different fields.
+Addressee	
+Gaëlle Morgado Rik van t Hof
+
+Answer	
+From the meeting on 31-10-2018 Ogone is building there own 3ds server and hope fully they will be doing the same thing. From my understanding (from Ronald Middelkoop ) Ogone will not be adding the same amount of new fields to their Rosetta API as GlobalCollect is with their payment engine. It is unclear to me which of the fields they will implement and which ones they will not. I would really like to have more insight into this.
+
+Gaëlle:
+
+List of fields is available here:
+
+ 
+
+I discussed the plan further together with Alina, Miriam (for 3DS v2 requirement and methods URL handling) and Marieke (for the Rosetta mapping and PE requirement).
+
+The list of required new fields has been already implemented on the Legacy PE (asp) and the .Net deployment will follow with ETA end February (Along with the required mapping on Rosetta).
+
+So as soon as the fields we need are available on both Connect layer and Rosetta, Erebor will pick them up to assure mapping is done between both.
+
+Therefore, it really all depend on the pace of advancement on ICON-6858, if I understood correctly what I heard during the refinement session of this Tuesday.
+
+The orchestrator on our side takes care of the methods URL therefore, they are no changes on Connect for us on that part concerning redirection URL creation.
+
+So in the end, for Ogone Connect merchant (beside sending extra parameters for S2S request), they won't be a different behavior. The redirection URL will be provided as it always was without any breaking change, as it will be handled after the Rosetta layer.
+
+Connect just have to make sure for the RPP that it do retrieve, on behalf of the merchant, the browser information.
+
+Maybe Stravroula can explain it to you in more details as Miriam told me. Because she was involved in the discussion on why GC would not use that Orchestrator service.
+
+
+
+Question 7	Can Connect be (a bit) involved in PE development?
+Background of the question	
+If a Connect dev is involved with the PE development of 3DS v2, it would make the flow a lot clearer and allow for earlier challenges to design choices.
+
+It would also help ease development if both teams can align on what they expect from the other party.
+
+Addressee	
+Rik van t Hof
+
+Answer	From the meeting on 31-10-2018 Yes
+Why	
+This makes a lot of sense. With the given time pressure it is important that the lines of communication are as short as possible. We should have at least weekly meetings in my view. Stavroula Perdiki : Will you organize such a meeting? Rik van t Hof : i will send out a daily stand up call of 30 minutes max for status updates and urgent issues.
+
+
+
+Question 8	Will all 3DS redirects go through Connect or only the ones for v2?
+Background of the question	
+Rik mentioned during our meeting (12/10/2018) that all redirection should be handled by Connect instead of ORB.
+
+It wasn't clarified if this was intended for all 3DS redirects or only the new ones.
+
+Addressee	
+Rik van t Hof
+
+Answer	
+From the meeting on 31-10-2018 Yes all redirects through Connect will not use orb. ← Is the aim. I know that this will be challenging for the fraud team to do as they have limited development resources.
+
+Added by Petra Steenstra : for 3Dv1 and 3Dv2 the aim is to no longer use ORB. We will need to have a feature toggle in place though for not-using ORB.
+
+Why	Conversion wise ORB should not be used for Connect merchants as it adds an additional component in the mix that is not responsive and doesn't support the locales that Connect supports. This means that the UX is not the same as that of Connect (it is worse).
+
+
+Question 9	When we need to gather the information for the Provider check ourselves, where can we get this information, how do we map it?
+Background of the question	
+When we do not get the full set of data needed by the Merchant, we need to collect the data. For this we need to get some input; what is the minimal set of datapoints that the provider needs to determine the flow? How do we collect/map these datapoints?
+
+Addressee	Rik van t Hof
+Answer	From the meeting on 31-10-2018 Yes, we should collect the device/browser based fields, but based on the flow the AReq might already be executed before we have been able to do so. In a hostedCheckout scenario we can collect these datapoint, but in a non-hostedCheckout flow we might not be able to do so. It might be a good idea to add the required datapoints to the ClientMetaData that is send by the JavaScript ClientSDK, so we can grab the data from there.
+Why	We want to reduce the impact for merchants as much as possible, we also want them to benefit from a potential frictionless flow as much as possible as this should increase conversion.
+
+
+
+
+Question 10	How do we know any returned redirect is a methodURL?
+Background of the question	Is this a special redirect URL or any special redirect URL. We need to know this because we need to treat it differently (no simple redirect, but a hidden iFrame).
+Addressee	
+Rik van t Hof
+Answer	
+From the meeting on 31-10-2018 We should look for methodurl tag. The response from the payment engine clearly marks this differently (this means that Rosetta should also mark this differently). Ronald Middelkoop and Gaëlle Morgado : Please take this into account for the Ogone implementation.
+
+Miriam Zriniova Maxime Degallaix  Confirmed we don't need this for Connect@Ogone, it will be handled by the orchestrator, therefore we will just forward the redirect URL as usual.
+
+
+
+Question 11	What is the answer on a poll when the challenge is not yet completed?
+Background of the question	We have 3 possible answers on a poll, the ARes with Y (Status 200), with C (Status 50) and ...? The latter means that the merchant or RPP needs to keep polling instead of any redirect (to status page for Y).
+Addressee	
+Rik van t Hof / Stavroula Perdiki
+Answer	
+From the meeting on 31-10-2018 Status 80 will be returned when the challenge is still in progress.
+
+The status during a challenge will be 50 (the same as when a methodURL is being handled). The status of the transaction can't be used to determine if a methodURL or Challenge is happening. Another field will be needed to determine this difference.
+Stavroula Perdiki : How will payment engine communicate this intermittent state? Rik van t Hof : PE will not exactly "communicate" anything. PE will be storing every value that we receive from the preparation request and depending on the merchant - ORB/WDL/Connect - the database will be checked to define the next step.
+Nishant Patil / Nishesh Shukla can you please confirm? Nishant Patil - I do not understand this scenario correctly, when the challenge is not complete ? - Does this means that ARes is received and transStatus is 'C', because only in this case challenge flow must come. And in challenge flow the control will be returned to client apps (ORB redirected by ACS call PROCESS_RETURNED) and the new flow of connect the CRes is returned to notification handler which should push this CRes to PE for validation.
+Why 	
+
+
+Question 12	What are the field names of the newly requested payment engine fields?
+Background of the question	
+We have the following new fields that haven't been defined yet on the payment engine side that we would like to be able to submit (and have them stored in the EPS database) - Please note that I have used our proposed PE names of the fields:
+THREEDSPROTOCOLVERSION (This field is needed both in the output as well as in the input (in case of external 3D authentication done by the merchant))q21& q12a 
+THREEDSERVERTRANSACTIONID (This field is needed both in the output as well as in the input (in case of external 3D authentication done by the merchant))q21 &q12b - or do we intend to simply keep using the XID field for this data?
+CUSTOMERACCOUNTCHANGEDDURINGCHECKOUT (we have added this simple boolean to make it easier for the merchant do submit the age of an account))Rik van t Hof Nishant Patil Stavroula Perdiki confimred we do not process but we only store it in our table 
+CUSTOMERACCOUNTCHANGEDPASSWORDDURINGCHECKOUT (we have added this simple boolean to make it easier for the merchant do submit the age of the password of an account))Rik van t Hof Nishant Patil Stavroula Perdiki confimred we do not process but we only store it in our table 
+CUSTOMERACCOUNTPAYMENTACCOUNTONFILETYPE)Rik van t Hof Nishant Patil Stavroula Perdiki confimred we do not process but we only store it in our table 
+BROWSERINNERHEIGHT (This is useful to determine the iFrame size that is used to display our pages in. We could potentially use this to auto determine the Challenge Canvas size)Rik van t Hof Nishant Patil Stavroula Perdiki confimred we will store it in the EPS
+BROWSERINNERWIDTH (This is useful to determine the iFrame size that is used to display our pages in. We could potentially use this to auto determine the Challenge Canvas size)Rik van t Hof Nishant Patil Stavroula Perdiki confimred we will store it in the EPS
+MOBILEPHONENUMBER (I think we should simply add a new field to capture the mobile phone number). Rik van t Hof Nishant Patil Stavroula Perdiki confimred we will add in in the order part
+Addressee	
+Stavroula Perdiki
+Answer	
+Rik van t Hof : please see my questions below:
+
+THREEDSPROTOCOLVERSION: see question 12a
+
+
+THREEDSSERVERTRANSACTIONID : 
+CUSTOMERACCOUNTCHANGEDDURINGCHECKOUT: Rik van t Hof what is the difference between this and the existing field CUSTOMERACCOUNTCHANGEDATE? the merchant will already have to send a great number of fields so wondering if we are making it even more difficult for the merchant. Answer: As stated above we are actually making it easier for the merchant. Instead of the merchant having to calculate the age for every transaction we can easily determine it ourselves. We will not expose the AGE field.
+
+CUSTOMERACCOUNTCHANGEDPASSWORDDURINGCHECKOUT : same question as above: Rik van t Hofwhat is the difference between this and the existing field Answer: As stated above we are actually making it easier for the merchant. Instead of the merchant having to calculate the age for every transaction we can easily determine it ourselves. We will not expose the AGE field.
+
+CUSTOMERACCOUNTCHANGEDATE? the merchant will already have to send a great number of fields so wondering if we are making it even more difficult for the merchant. Answer: As stated above we are actually making it easier for the merchant. Instead of the merchant having to calculate the age for every transaction we can easily determine it ourselves. We will not expose the AGE field.
+
+CUSTOMERACCOUNTPAYMENTACCOUNTONFILETYPE: Rik van t Hof what is the format of this field? can you please clarify how you have envisioned the content of this field and what it will serve as there is an existing field that covers account on file if i am not mistaken Answer: Possible values are "none (guest) / account created during this transactions / account existing". It is an ENUM and we haven't detailed all the ENUM values at the moment. There is no existing field that holds this information.
+
+BROWSERINNERHEIGHT: What is the format of this field? Answer from Rik van t Hof : This is an Integer, similar to the BROWSERSCREENHEIGHT.
+
+BROWSERINNERWIDTH: What is the format of this field? Answer from Rik van t Hof : This is an Integer, similar to the BROWSERSCREENWIDTH.
+
+
+MOBILEPHONENUMBER: In our current API we already have the mobile field so why add another one for the same information? Answer from Rik van t Hof : No we don't have a field specifically for the mobile phone number. We have a generic one for phone number.
+
+
+[ Commented by Nishant ]
+
+THREEDSERVERTRANSACTIONID -
+
+CUSTOMERACCOUNTCHANGEDDURINGCHECKOUT - I don't see why this should be added on PE, as CUSTOMERACCOUNTCHANGEINDICATOR value = 1 should be sufficient. NOTE:  You don't have these fields currently, I'm requesting you to add them to payment engine.
+
+CUSTOMERACCOUNTCHANGEDPASSWORDDURINGCHECKOUT - CUSTOMERACCOUNTPASSWORDCHANGEINDICATOR value = 2 should be suffiecient NOTE:  You don't have these fields currently, I'm requesting you to add them to payment engine.
+
+CUSTOMERACCOUNTPAYMENTACCOUNTONFILETYPE - ? Answer: You have the field called CUSTOMERACCOUNTPAYMENTACCOUNTONFILEAGEINDICATOR in your spec. The ENUM values are both capturing whether the account exists, when it was created and how old it is. We are using two fields that are easier for the merchant to submit to capture this data. We are asking for the creationDate of the account and we are asking the accountType that can have the following ENUM values: "none (guest) / account created during this transactions / account existing"
+
+BROWSERINNERHEIGHT - Should it be BROWSERSCREENHEIGHT ? Answer: This is a different (and new) field.
+
+BROWSERINNERWIDTH - Should it be BROWSERSCREENWIDTH Answer: This is a different (and new) field.
+
+MOBILEPHONENUMBER - should be added. Follow-up: Where will it be added?
+
+
+
+
+Why 	
+
+
+Question 12a	What are the field names of the newly requested payment engine fields? THREEDSPROTOCOLVERSION
+Background of the question	We have the following new fields that haven't been defined yet on the payment engine side that we would like to be able to submit (and have them stored in the EPS database) - Please note that I have used our proposed PE names of the fields:
+THREEDSPROTOCOLVERSION (This field is needed both in the output as well as in the input (in case of external 3D authentication done by the merchant))q21
+Addressee	
+Nishant Patil Stavroula Perdiki
+
+Answer	
+ Rik van t Hof: is the name missing an "S" after THREED or is it on purpose?
+Good point: We need to agree on the name of these kinds of fields. Either leave out the S or spell it out as SECURE.)Rik van t Hof Nishant Patil Stavroula Perdiki : confirmed we will just pass it on
+THREEDSPROTOCOLVERSION: the protocol version supported by each ACS provider will be stored in two tables on our side:
+existing EPS.PCO_CREDITCARDONLINE
+a new schema that we will introduce: EPS.PCO_AUTH3D so you can always pick it from there.
+Follow-up remark by Rik van t Hof : Connect can't pick up any values from the EPS database. We only have access to input and output fields. This field should be one of the output fields of any 3D authentication in the future in my view and it should also be added to the externalCardholderAuthenticationData object that currently already exists in the Connect API as input (when the merchant has done the Authentication elsewhere).
+ Follow-up question: Nishant Patil : What will be the exact format? Will it be "1.02", "2.1.0" or "v1", "v2" or something else? Nishant Patil : This will be added in SDD
+ Follow-up question for Nishant Patil : What will be the exact format? Will it be "1.02", "2.1.0" or "v1", "v2" or something else?
+
+
+
+
+
+
+Question 12b	What are the field names of the newly requested payment engine fields? THREEDSERVERTRANSACTIONID
+Background of the question	THREEDSERVERTRANSACTIONID (This field is needed both in the output as well as in the input (in case of external 3D authentication done by the merchant))q21 - or do we intend to simply keep using the XID field for this data?
+Addressee	
+1. Answered
+
+2. Stavroula Perdiki
+
+3. Nishant Patil
+
+4. Stavroula Perdiki
+
+Answer	
+ Rik van t Hof is the name missing an "S" after THREED or is it on purpose?.)Rik van t Hof Nishant Patil Stavroula Perdiki : confirmed we will just pass it on
+This value will be stored in EPS.PCO_AUTH3D so you can always pick it from there. 
+Follow-up remark from Rik van t Hof : Connect can't pick up any values from the EPS database. We only have access to input and output fields. This field should be one of the output fields of any 3D authentication in the future in my view and it should also be added to the externalCardholderAuthenticationData object that currently already exists in the Connect API as input (when the merchant has done the Authentication elsewhere).
+Answer from Nishant Patil : This will be added as both input and output ( we can reuse XID here, but XID is generated by PE whereas threeDsServerTransId is generated outside of PE). 
+Follow-up remark from Rik van t Hof : I'm fine to use the existing XID field, but this is something we need to agree upon as it changes my input API definition and your output definition. Does the XID field definition (type/length) match with the expected other IDs that you would be putting into this field? 
+Question from Petra Steenstra : Who creates the THREEDSERVERTRANSACTIONID?
+
+
+
+
+
+
+Question 13	How is the EMVco field threeDSRequestorAuthenticationInd (THREEDAUTHENTICATIONINDICATOR) value determined?
+Background of the question	This field has the following values:
+01 = Payment transaction
+02 = Recurring transaction
+03 = Installment transaction
+04 = Add card
+05 = Maintain card
+06 = Cardholder verification as part of EMV token ID&V
+I can imagine that certain merchants might want to determine this field as they might be adding a card or maintaining a card that is stored on their side. Option 6 might be needed if they store EMV based tokens. We might also wish to use 04 when the merchant is doing a 0$ auth via the hostedCheckout with a tokenize set to True. We should also differentiate between 01 and 02 depending on the OrderType and the EffortID.
+Addressee	
+Stavroula Perdiki
+Answer	
+Rik van t Hof Ogone team has responded the below:It is not handled by the server, it should be a parameter that is sent to thee 3DS Server during the /payment-authentications/authentication-requests step. Here is an example :
+{
+               "protocolVersion": "V2_1_0",
+               "cardExpiryDate": {
+                              "year": 2020,
+                              "month": 10
+               },
+               "primaryAccountNumber": "5139406069339366",
+               "scheme": "visa",
+               "acquirerBIN": "868491",
+               "acquirerMerchantID": "mGm6AJZ1YotkJJmOk0fx",
+               "deviceChannel": "01",
+               "messageCategory": "PaymentAuthentication",
+               "threeDSRequestorInformation": {
+                              "id": "az0123456789",
+                              "name": "Example Requestor name",
+                              "url": "https://threedsrequestor.adomainname.net",
+                              "authenticationIndicator" : "PaymentTransaction"
+               },
+               "notificationUrl": "https://webdev.oglan.local/ncol/test/displayparams.asp",
+               "challengeInformation": {
+                              "windowSize": "250x400"
+               }
+               
+}
+in the EMVCo document you can see it in  threeDSRequestorInformation -> authenticationIndicator and the definition of the field is: Indicates the type of Authentication request. This data element provides additional information to the ACS to determine the best approach for handing an authentication request. The values accepted for the field by MPI are  :  PaymentTransaction, RecurringTransaction, InstalmentTransaction, AddCard, MaintainCard, CardholderVerificationAsPartOfEmvTokenIdAndV
+
+Stavroula Perdiki : This wasn't a question for Ogone, but for our own implementation in our payment engine. How do we determine the value for this field? As I stated in my question, I think merchants (or Connect) might want to control this value. This would mean that we would need to expose it in our API and you would need to expose it in the Payment Engine API. Can you answer how this is handled in Payment Engine?
+
+
+
+Why 	
+
+
+Question 14	How is the CReq flow?
+Background of the question	The way we understand the documentation the CReq is a JSON string that will need to be posted by the consumer browser to the ACS. This will load the challenge page. Please confirm our assumption.We want to complete our flow diagram. 
+Addressee	
+Stavroula Perdiki
+Answer	
+Rik van t Hof please refer to this link: 3D v2.1 for the complete flow diagram for WDL merchant with method url and challenge flow. It is the ACS that will send the CReq (encrypted field) + the challenge url to the merchant browser (via the whole chain) in order for the consumer to be redirected and take the challenge. The channel between the consumer and ACS opens and the consumer enters the 4 digit code. ACS checks if the initially sent CReq is the same and responds with CRes to the merchant server (containing ECI and CAVV values). The latter triggers do_validate
+Why 	
+
+
+Question 15	How is the CRes flow?
+Background of the question	Based on the EMV documentation we believe that the CRes is a push message from the ACS towards the 3DServer. This means that the CRes does not pass through the browser of the consumer and is not part of the DO_VALIDATE API call. What can we expect to get back to the returnURL (via the consumer redirecting back to us) that we would need to submit in the DO_VALIDATE API call towards payment engine?We want to complete our flow diagram. 
+Addressee	
+Stavroula Perdiki
+Answer	
+Rik van t Hof please refer to this link: 3D v2.1 for the complete flow diagram for WDL merchant with method url and challenge flow. CRes is a push from ACS to merchant server and it is neither passed to the browser of the consumer nor is it part of the do_validate. When the merchant server receives it, it initiates the do_validate call that is passed to 3DS Server. Nishesh Shukla / Nishant Patil can you guys please confirm the above and share input? Nishant Patil : merchant server could be orb in case of legacy - here we require to have merchant return url for redirection. EMVCO document suggest to have inline/iframe in that case the handling would be different. 
+Why 	
+
+
+Question 16	What happens if the 3DServer does not have the Authentication Value (which it gets from the CRes) before we need to have it for the authorization?
+Background of the question	If the CRes is a push message in the back, this can be delayed or lost, but I think this Authentication Value is required for the authorization. We want to complete our flow diagram and look at edge cases. 
+Addressee	
+Stavroula Perdiki
+Answer	
+i believe that the authentication was not able to complete and the corresponding error appears such as "Y", "N", "Unavailable" and then the authentication_failed_indicator takes over.  Nishesh Shukla / Nishant Patil can you guys please confirm the above and share input? Nishant Patil - If we won't get do_validate call then it is authentication failed scenario. In this case there will be authorization only when authenticationfailedind is 1. 
+
+Why 	
+
+
+Question 17	Please explain when the RReq and RRes message are being used.
+Background of the question	Our assumption is that they are used based on our DO_VALIDATE API request. Please confirm that they are used to retrieve the Authentication Value from the 3DServer? We want to complete our flow diagram.
+Addressee	
+Stavroula Perdiki
+Answer	
+response from Rakesh:RReq and RRes communication happens between ACS and 3DSServer. Ingenico, as PSP, has no role in RReq and RRes part. Once Customer authenticates himself and click submit button at ACS URL page,  ACS sends the Authentication Result (ECI,CAVV,Status, etc) to 3DSServer in the form of RReq and 3DSServer stores the result and sends back an acknowledgement (RRes) to ACS. Ingenico makes the validate call to 3DSServer to receive ECI,CAVV, TransStatus , etc. This call is made when we receive Do_Validate API call from WDL merchants
+Why 	
+
+
+Question 18	Is it true that 3DS can be triggered for Google and/or Apple Pay payments? And if so, what does the UX look like?
+Background of the question	Does this mean that after authorization via the Google Payment sheet, a Challenge may be required to be performed by the consumer?
+Addressee	
+Rik van t Hof Petra Steenstra
+
+Answer	
+Why 	
+At first glance this seems poor UX, however this flow should not happen all too often.
+Also, even though in theory it should work out of the box, we probably want to test this combination of Google/Apple Pay and 3DSv2.
+
+
+
+Question 19	Do we need to warn/discuss with OPS that traffic for the RPP might increase?
+Background of the question	As it currently stands we do not expect that the MethodUrl flow will be massively used right from the start. However, if we are mistaken traffic for the RPP might increase heavily as we will be processing MethodUrl and Challenges in a Hosted Checkout session for merchants who are not actually using Hosted Checkouts.
+Addressee	
+Rik van t Hof
+
+Answer	
+Why	
+
+
+
+
+Question 20	(How) will we allow editing of the RPP and subdomain for s2s merchants?
+Background of the question	As it currently stands we do not expect that the MethodUrl flow will be massively used right from the start. However, if we are mistaken traffic for the RPP might increase heavily as we will be processing MethodUrl and Challenges in a Hosted Checkout session for merchants who are not actually using Hosted Checkouts.
+Addressee	
+Rik van t Hof
+
+Answer	
+Why	
+
+
+
+
+Question 21	In Question 12 the following is mentioned: "in case of external 3D authentication done by the merchant". Does this need to be supported from the start, or is this something that we can add in a later stage?
+Background of the question	I believe we discussed that the most important flow is the one where merchants will receive a redirect to a Hosted Checkout session. Does this alternative flow, where merchants host the methodUrl and Challenge themselves, need to be part of the initial 3DSv2 release as well?
+Addressee	
+Rik van t Hof
+
+Answer	
+Nishant - The scope of change is more on acquiring tribe. I would suggest Paula Costa to answer this one. Nishesh Shukla Our 3d module will not even come to picture hence as long as acquirers can handle the fields its fine
+
+Why	
+It will be easier to release a first version without offering this flow to merchants as well.
+
+
+
+Question 22	How should we return the threeDSecureTransactionStatus and threeDSecureTransactionStatusReason (THREEDTRANSACTIONSTATUS and THREEDTRANSACTIONSTATUSREASON)
+Background of the question	There still needs to be a consensus on how these are to be returned. Will this be part of error messages (event id + message), or as separate fields?
+Addressee	
+Rik van t Hof
+
+Answer	
+Rik van t Hof : I think the most logical way is to map these to eventids and messages in payment engines. Stavroula Perdiki: Can you confirm that this is indeed what your team will do? [ Nishant] - Event id and messages are used in case of errors. transStatus and reason are not errors hence we should add new field to return these values to merchant. Please note that transStatus is mapped with statusid returned to merchant.
+
+Rik van t Hof : transStatusReason should map to eventIds in my view. The values in the EMVco document even map to existing eventIds. This is also the way merchants are expecting to get this type of data. Adding some kind of special 3D response field doesn't make any sense for merchants (both WDL and Connect). Can we please have a discussion on this topic?
+
+Nishant -  This story is implementing event ids. The final list of event ids (or reusing existing) will be shared once the story picked up. 
+
+Why	
+
+
+
+
+Question 23	What is in the cardholderInfo and how can merchants use this data?
+Background of the question	The current description mentions "Show transaction results" of the merchantAction, but credit cards do not use this type of merchant actions. Without knowing more information about this field we cannot map this properly.
+Addressee	
+Rik van t Hof
+
+Answer	See the ticket
+Why	
+
+
+
+
+Question 24	Shouldn't we handle the Connect internal object until we actually need it?
+Background of the question	
+That object was marked as part of the  epic, which means we should add them through . The Connect internal object is for sending information from the Gateway to the RPP. Shouldn't we then postpone this object until the RPP work is started?
+
+Addressee	
+Rik van t Hof
+
+Answer	
+Why	
+
+
+
+
+Question 25	What should the enum values be?
+Background of the question	
+We are missing several PE values, and values like "Account created during this transactions" (sic) are not enum values.
+
+I propose the following, where cells marked in red require attention:
+
+Path	PE field	PE value	Connect value	Description
+order.customer.account.authentication.method
+
+
+CUSTOMERAUTHENTICATIONMERCHANTMETHOD	1	guest	Guest Login
+2	merchant-credentials	Login to the cardholder account at the 3DS Requestor system using 3DS Requestor’s own credentials
+3	federated-id	Login to the cardholder account at the 3DS Requestor system using federated ID
+4	issuer-credentials	Login to the cardholder account at the 3DS Requestor system using issuer credentials
+5	third-party-authentication	Login to the cardholder account at the 3DS Requestor system using third-party authentication
+6	fido-authentication	Login to the cardholder account at the 3DS Requestor system using FIDO Authenticator
+order.customer.account.paymentAccountOnFileType	CUSTOMERACCOUNTPAYMENTACCOUNTONFILETYPE	Same as order.customer.accountType (but with different object)
+order.customer.accountType	ACCOUNTTYPE (FRAUD-5953)	1	none	None (guest)
+2	created	Account created during this transaction
+3	existing	Existing account
+order.shipping.type	DELIVERYTIMEFRAMEINDICATOR	1	electronic	Electronic
+2	same-day	Same day
+3	overnight	Overnight
+4	2-day-or-more	2-Day or more
+order.shipping.addressIndicator
+
+SHIPPINGADDRESSINDICATOR	1	same-as-billing	Same as Billing
+2	another-verified-address-on-file-with-merchant	Another verified address on File with merchant
+3	different-than-billing	Different than billing
+4	ship-to-store	Ship to store (shipping address = shop address)
+5	digital-goods	Digital goods
+6	travel-and-event-tickets-not-shipped	Travel & event tickets not shipped
+7	other	Other
+cardPaymentMethodSpecificInput.threeDSecure.priorThreeDSecureData.method
+
+payment.paymentOutput.cardPaymentMethodSpecificOutput.threeDSecureResults.threeDSecureData.method
+
+Source: SDD 3Dv2https://confluence.techno.ingenico.com/display/FPS/SDD+3Dv2	
+PRIORTHREEDSMETHOD
+
+CUSTOMERTHREEDMETHOD
+
+1	frictionless	Frictionless authentication occurred by ACS
+2	challenged	Cardholder challenge occurred by ACS
+3	avs-verified	AVS verified
+4	other	Other issuer methods
+cardPaymentMethodSpecificInput.threeDSecure.challengeIndicator	THREEDSAUTHENTICATIONCHALLENGEINDICATOR	1	no-preference	No preference
+2	no-challenge-requested	No challenge requested
+3	challenge-requested	Challenge requested
+4	challenge-required	Challenge required
+
+
+Addressee	
+Rik van t Hof, Ronald Middelkoop
+
+Answer	
+Nishant - The values are defined in SDD. Ronald Middelkoop : Made some minor changes to the enums, no further remarks.
+
+Rik van t Hof: Marked all the values in green (on the laptop of Petra Steenstra ). CUSTOMERACCOUNTPAYMENTACCOUNTONFILETYPE is not mapped on payment engine side. Next to that, the Connect field accountType (order.customer.accountType) is not the same as the PE field ACCOUNTTYPE. The meaning is totally different. The Connect field is used to determine the CUSTOMERACCOUNTPAYMENTACCOUNTONFILEAGEINDICATOR together with CUSTOMERACCOUNTPAYMENTACCOUNTONFILECREATEDATE.
+
+
+
+Petra Steenstra If I am correct CUSTOMERACCOUNTPAYMENTACCOUNTFILETYPE is now named CUSTOMERACCOUNTTYPE. Ramseshu Ghanta and Pascal Quist to confirm.
+
+Why	
+
+
+Question 26	Some deprecated fields are also used for risk assessment, should these be changed as well?
+Background of the question	
+Both the fraudFields and airLineData objects are also used for risk assessment. Do these also need to have the new fields mapped? This means we would need to add data to risk assessment as well - at least order.customer.accountType and order.shipping.type.
+
+If not, then we are currently unable to mark some fields as deprecated completely. For SDKs it's all or nothing, and for API references we will show them as conditionally deprecated.
+
+
+
+Fields so far:
+
+Deprecated field	Replacement field	Notes
+fraudFields.hasPassword	order.customer.accountType	
+fraudFields.addressesAreIdentical	order.shipping.addressIndicator	order.shipping is also completely new for risk assessment
+fraudFields.shippingDetails.methodSpeed	order.shipping.type	order.shipping is also completely new for risk assessment
+order.additionalInput.airlineData.isRegisteredCustomer	order.customer.accountType	
+
+
+Addressee	
+Rik van t Hof
+
+Answer	
+Why	
+
+
+
+
+Question 27	Are the new fields stored in the database and if yes, where?
+Background of the question	
+QA and UAT would like to understand where they can find the fields in the database where the data can is stored.
+
+Addressee	
+Nishesh Shukla Nishant Patil
+
+Answer	
+Nishant - OPR_AUTHENTICATE + OPR_ORDER
+
+OPR_AUTHENTICATE has json data where all the fields under authenticate tag will be stored
+
+OPR_ORDER - newly introduced fields will be added
+
+PAYMENT tag fields will be decided after finalizing with Acquiring tribe.
+
+All the fields that are send to 3ds server will be found in SPF.DOCUMENT_STORE.
+
+Why	
+
+
+
+
+Question 28	What will happen if in the payment engine setting for usage of V2 is set to true, we configure a merchant with Realex and sent in a transaction with a card from an issuer that supports 3-D Secure V2.
+Background of the question	
+QA and UAT would like to understand what will happen in this scenario
+
+Addressee	
+Nishesh Shukla Nishant Patil Stavroula Perdiki
+
+Answer	
+Nishant - Please refer to the SDD for the fallback and supporting version scenarios.
+
+PE will always check for the version, in case v2 is not possible due to technical errors (timeout, connection not working, fields not correct) it will fallback to whatever v1 provider supported.
+Read the technical information in SDD.
+Why	
+
+
+
+
+Question 29	Why is the field transType not included in the SDD of the Fraud team? And why is it not part of the DO_PAYMENT?
+Background of the question	
+The field is required in certain countries like Brazil.
+
+Addressee	
+Nishesh Shukla Nishant Patil Stavroula Perdiki
+
+Answer	
+Nishant - It is now included as TRANSACTIONTYPE. Petra Steenstra wants to know why it is not part of the DO_PAYMENT for ICON-8190.
+
+Why	
+
+
+
+
+Question 30	How do we handle recurring transactions?
+Background of the question	
+For recurring transactions the following EMVco fields are required (when 3DS Requestor Authentication Indicator, threeDSRequestorAuthenticationInd (THREEDAUTHENTICATIONINDICATOR) = 02):
+
+recurringExpiry
+recurringFrequency
+This is related to question 13, which is still open.
+
+Addressee	
+Nishesh Shukla Nishant Patil Stavroula Perdiki
+
+Answer	
+Why	
+
+
+
+
+Question 31	Do we add new fields to PE for recurringExpiry and recurringFrequency?
+Background of the question	
+For recurring transactions the following EMVco fields are required (when 3DS Requestor Authentication Indicator, threeDSRequestorAuthenticationInd (THREEDAUTHENTICATIONINDICATOR) = 02):
+
+recurringExpiry
+recurringFrequency
+Will these be added as new fields to PE or will we use existing fields (which ones)?
+
+Can we please have the names of the PE fields for both of these fields.
+
+Addressee	
+Nishesh Shukla Nishant Patil Stavroula Perdiki
+
+Answer	
+Why	
+
+
+
+
+Question 32	Can you put the following changes in your SDD?
+Background of the question	
+Some of the following bullets might allready have been covered by previous questions, but this is put here to just keep track of it.
+
+Hi all,
+Can you please change the SDD table displayed on this Confluence page to include the following changes:
+
+Split up INSERT_ORDER and DO_PAYMENT and have the correct fields aligned with each of these 2 calls (right now, also in the SDD we're still talking about IOWP, which is not the call we will sent Rik van t Hof , it will be INSERT_ORDER and DO_PAYMENT, where INSERT_ORDER will have the block of ORDER, and the DO_PAYMENT will have the PAYMENT and AUTHENTICATE objects)
+Add the CONTACTWEBSITEURL (AN2048) field to the ?AUTHENTICATE? object
+Add the BROWSERJAVAENABLED (N1) field to the ?AUTHENTICATE? object (yes, it is also there, just like BROWSERJAVASCRIPTENABLED to make things more confusing)
+Add the RECURRINGEXPIRY (N8) field to the ??? object (Date in YYYYMMDD after which there will be no further charges)
+RECURRINGFREQUENCY (N4) field to the ??? object (Minimum number of days between authorizations)
+Change the type Boolean to something supported on your end (N1 I guess)
+Change the type Enum to the actual enum value (CUSTOMERACCOUNTTYPE has type enum and no mapping)
+Add the THREEDSCHALLENGECANVASSIZE
+Riks' description:
+
+Dimensions of the challenge window that potentially will be displayed to the consumer. The challenge content is formatted to appropriately render in this window to provide the best possible user experience.
+Preconfigured sizes are width x height in pixels of the window displayed in the consumer browser window.
+
+official EMVco spec enum values:
+
+250x400
+390x400
+500x600
+600x400
+full-screen
+
+Addressee	
+Nishesh Shukla Nishant Patil Stavroula Perdiki
+
+Answer	Add the THREEDSCHALLENGECANVASSIZE (Done → CHALLENGEWINDOWSIZE)
+Why	
+
+
+Question 33	What will we do with fields that are required, unless "market or regional mandate restrictions" apply?
+Background of the question	
+For some fields the 3DSv2 specification states: "Shall include this field where regionally acceptable", or: "Required unless market or regional mandate restricts sending this information". 
+
+For almost all of the fields this should not be a problem, as merchants can choose whether to provide them or not and they should be aware of the restrictions that apply in the markets they operate in. (This is an assumption I made. Maybe we do want to do some verification with these fields to protect merchants?)
+
+However, the "browserIpAddress" field will (likely) be collected by the RPP. How will we handle this? We could:
+
+Never collect the field. This might negatively influence the Authentication rate.
+Always collect and provide the field. This will be illegal for certain transactions.
+Investigate in what countries we are allowed to collect the field, and only collect it then. This solution is complicated, error prone and may not work for consumers hiding, or faking their region.
+Maybe we can do something clever with only collecting the field in Connect instances running in the Miami or Amsterdam data center (whichever is the one that has the most merchants for which the field is allowed). I am not quite sure however whether this will be possible, and how watertight a solution it is.
+Addressee	
+Rik van t Hof to answer. Which of these options should we go with?
+
+Answer	
+Why	
+
+
+
+
+FRAUD Related Tickets:
+Fraud Prevention Solutions > Connect refinement for 3D V2 implementation in Connect > image2018-11-26_23-21-1.png
+
+Fraud Prevention Solutions > Connect refinement for 3D V2 implementation in Connect > image2018-11-26_23-21-30.png
+
+
+
+FRAUD-4990
+
+FRAUD-4991
+
+FRAUD-4940
+
+FRAUD-5176
+
+FRAUD-5204
+
+Open Points to be Finalized
+1. Handling of Notification URL 
+9/1/2019 Update: we have identified a solution that will work for the PE and have also been approved by Gennaro and security and we are currently analyzing it. In the next sprint we will start with the implementation. During the workshop with Connect on the 18th of December we presented the solution to Connect team and Connect decided to handle the notification url themselves in  a different way. Rik van t Hof : can you please confirm? 
+
+2. WDL merchants & how to handle the 3D v2 flow
+During initial discussion Rik suggested to enforce WDL merchants to use ORB by changing the Hosted Indicator from 0 to 1. However this was just a suggestion and no final solution or course of action was reached on the workshop on the 18th Dec. 
+
+We have taken the entire PE and ORB flow under our responsibility and we are now developing it. We will expose three new API calls that WDL merchants can use to handle 3D v2 flow. After we are done with 3D v2 implementation and the behavior has been stabilized and if WDL merchants need a different solution we can take it later as a feature.
+
+
+
+
+
+
+
+Existing field
+
+New field, no field in PE yet. Not needed for 3D, but relevant information to identify how our page is shown, We should add these to the ClientMeta fields from our JSClientSDK
+
+"appId"
+
+Ronald Middelkoop  
+
+CUSTOMERACCOUNTDATE 
+
+CUSTOMERAUTHENTICATIONTOMERCHANTUTCTIMESTAMP
+
+I do not think it is handled by the server, it should be a parameter that is sent
+
+BROWSERINNERWIDTH
+
+NON 3DS V2
+
+COGO-2837
+
+https://jira.techno.ingenico.com/browse/ICON-7910 
+
+NON 3DS V2
+
+Required in browserflow when javaScriptEnabled is true
+
+threeDSecureResults
+
+CUSTOMERAUTHENTICATIONTOMERCHANTUTCTIMESTAMP
+
+CHANGEDDURINGCHECKOUT
+
+passwordChangeDate
+
+externalCardholderAuthenticationData
+
+browser = Consumer is using a browser to complete the checkout (default)
+in-app = Consumer is using an app with a 3-D Secure SDK to complete the checkout
+THREEDSPROTOCOLVERSION
+
+Required for App Challenge flow
+
+Use in merchantAction; MOBILE_THREEDS_CHALLENGE
